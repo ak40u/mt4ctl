@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-05-24
+
 ### Added
 
 - `mt4_adopt` now reports the live charts on the host that are **not** in the
