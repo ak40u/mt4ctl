@@ -134,17 +134,27 @@ hosts:
 
 ## 6. Start WSL automatically on Windows boot
 
-A WSL distro only runs while it has a live process or session. For an unattended
-farm, start it at boot. Create a Windows **Scheduled Task** that runs at startup:
+A WSL distro only runs while it has a live process or session, and **WSL2 shuts
+the VM down on idle** — which takes your whole farm down with it. A task that just
+*boots* the distro (`wsl … /bin/true`) is **not enough**: it exits immediately, so
+once the VM idles it stops and every terminal dies until something pokes it again.
 
-- Trigger: **At startup**
-- Action: `wsl.exe -d Ubuntu-24.04 -- /bin/true` (this boots the distro; with
-  `systemd=true` your enabled services then come up)
-- Run whether the user is logged on or not.
+Use a **keep-alive** that *holds* the VM up. Create a Windows **Scheduled Task**:
 
-Test it by rebooting Windows and checking the services are up over SSH. WSL
-autostart can be finicky depending on whether the task runs in the right user
-context — verify after a real reboot rather than assuming.
+- Trigger: **At log on** (the task must run in the distro owner's user context —
+  WSL distros are per-user, so a `SYSTEM` task usually can't see `Ubuntu-24.04`)
+- Action: `wsl.exe -d Ubuntu-24.04 -- /usr/bin/sleep infinity` (a never-ending
+  process keeps the VM alive; with `systemd=true` your enabled services stay up)
+- Run only when that user is logged on (or "whether logged on or not" if you can
+  store the password and the box auto-logs-in)
+
+Test by rebooting and confirming services are still up over SSH **after the VM has
+been left idle for a few minutes** — not just right after boot. Autostart is
+finicky about user context; verify on a real reboot.
+
+> Don't rely on the terminals themselves to keep WSL alive — the idle timer can
+> still win. And a stray `wsl --shutdown` kills the keep-alive (and the farm); if
+> you run one, re-trigger the keep-alive task afterward.
 
 If you're **migrating from native Windows MT4**, disable the old autostart
 (Startup folder `.bat`/`.lnk`, or its scheduled task) so the two don't both run.
@@ -194,6 +204,10 @@ clipboard — use a standalone VNC viewer and a forwarded port like 5901.)
   `XDG_SESSION_TYPE=wayland`; launch x11vnc with `env -i DISPLAY=:99 ...`.
 - **Services don't come back after a Windows reboot** — the WSL autostart task
   didn't fire; re-check the scheduled task's user context (step 6).
+- **The whole farm cycles / terminals restart on their own every minute or two** —
+  WSL2's idle shutdown is taking the VM down whenever it's idle, and a boot-only
+  autostart (`/bin/true`) doesn't hold it. Use a `sleep infinity` keep-alive task
+  (step 6). A stray `wsl --shutdown` also kills the keep-alive — re-run the task.
 - **Spurious Wine freezes on broker reconnect** — same as on bare Linux; a
   heartbeat-file + `systemd` watchdog timer that restarts a stale terminal is the
   production-grade fix.
