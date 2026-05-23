@@ -12,13 +12,35 @@ interpolated raw into a double-quoted shell context.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import json
+from collections.abc import Iterable, Mapping
 
 CONTROL_ACTIONS = ("start", "stop", "restart")
 
 # Field separator for the status line protocol. Chosen so it never collides with
 # log text (we strip it from captured log lines before emitting).
 SEP = "|"
+
+# mt4ctl's private namespace inside a terminal's data dir. Everything the deploy
+# pipeline writes (staging, backups, manifest, lockdir) lives here, well away from
+# MT4's own tree, so it is trivially distinguishable from managed/foreign files.
+MT4CTL_DIR = ".mt4ctl"
+MANIFEST_REL = f"{MT4CTL_DIR}/deployed.json"
+BACKUP_DIR = f"{MT4CTL_DIR}/backups"
+STAGING_DIR = f"{MT4CTL_DIR}/staging"
+# Canonical lockdir name — referenced identically by acquire/release. An atomic
+# mkdir is the lock primitive (it survives across separate SSH invocations, which
+# a per-process flock cannot).
+LOCKDIR = f"{MT4CTL_DIR}/deploy.lock.d"
+
+# A portable sha256-of-a-file shell function, defined once and reused by the
+# scripts that hash remote files (state read + apply verification).
+_SHA_FUNC = (
+    "sha() { "
+    'if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk \'{print $1}\'; '
+    'elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk \'{print $1}\'; '
+    'else openssl dgst -sha256 "$1" | awk \'{print $NF}\'; fi; }'
+)
 
 
 def sh_quote(value: str) -> str:
@@ -233,4 +255,343 @@ umask 077
 export DISPLAY={sh_quote(display)}
 {activate}import -window root {out} 2>/dev/null || scrot -o {out} 2>/dev/null
 test -s {out} && echo "OK {out}" || echo "FAIL"
+"""
+
+
+# --------------------------------------------------------------------------- #
+# Deploy pipeline builders
+#
+# These produce the remote side of `operations.deploy`. The orchestrator holds a
+# single lock across the whole sequence and runs file mutations as the unit's
+# own user (the SSH user is the unit `User=` on this farm) so MetaTrader can
+# still rewrite `.chr`/`deployed.json` on exit; only `systemctl` runs as root.
+# --------------------------------------------------------------------------- #
+
+
+def build_remote_state_script(data_dir: str, dest_paths: Iterable[str], unit: str) -> str:
+    """Report everything the diff needs in one read: manifest, per-destination
+    existence + hash, the live chart set with EA refs, and the unit's ``User=``.
+
+    Emits ``SEP``-framed lines:
+
+    * ``USER|<unit User= or root>``
+    * ``MANIFEST|<base64 of deployed.json | MISSING>``
+    * ``CHART|<relpath>|<raw name= value>`` per live ``profiles/default/*.chr``
+    * ``DEST|<relpath>|<0|1>|<sha256|->`` per bundle destination
+
+    Hashes only the bundle destinations (not the whole Experts tree): add/update/
+    unchanged are decided against these, while removals are decided from the
+    manifest + chart refs, so no broader hashing is needed.
+    """
+    dir_q = sh_quote(data_dir)
+    unit_q = sh_quote(unit)
+    dest_calls = "\n".join(f"emit_dest {sh_quote(p)}" for p in dest_paths)
+    return f"""\
+set +e
+{_SHA_FUNC}
+DIR={dir_q}
+UNIT={unit_q}
+U=$(systemctl show -p User --value "$UNIT" 2>/dev/null)
+[ -z "$U" ] && U=root
+echo "USER{SEP}$U"
+MF="$DIR/{MANIFEST_REL}"
+if [ -f "$MF" ]; then
+  echo "MANIFEST{SEP}$(base64 -w0 "$MF" 2>/dev/null || base64 "$MF" | tr -d '\\n')"
+else
+  echo "MANIFEST{SEP}MISSING"
+fi
+for f in "$DIR"/profiles/default/*.chr; do
+  [ -e "$f" ] || continue
+  rel="profiles/default/$(basename "$f")"
+  name=$(awk '{{sub(/\\r$/,"")}} /<expert>/{{e=1}} e&&/^name=/{{print substr($0,6); exit}}' "$f")
+  echo "CHART{SEP}$rel{SEP}$name"
+done
+emit_dest() {{
+  rel="$1"; p="$DIR/$rel"
+  if [ -f "$p" ]; then echo "DEST{SEP}$rel{SEP}1{SEP}$(sha "$p")"; else echo "DEST{SEP}$rel{SEP}0{SEP}-"; fi
+}}
+{dest_calls}
+"""
+
+
+def build_drain_script(unit: str, timeout_s: int) -> str:
+    """Wait (up to *timeout_s*) for the unit's ``terminal.exe`` to leave its cgroup.
+
+    MT4 rewrites ``profiles/default/*.chr`` on exit, so apply must not touch the
+    tree until the process is truly gone. Exits non-zero if it persists, so the
+    orchestrator aborts apply rather than writing under a live terminal.
+    """
+    unit_q = sh_quote(unit)
+    return f"""\
+set +e
+UNIT={unit_q}
+cg=$(systemctl show -p ControlGroup --value "$UNIT" 2>/dev/null)
+for _ in $(seq 1 {int(timeout_s)}); do
+  found=0
+  for p in $(cat "/sys/fs/cgroup${{cg}}/cgroup.procs" 2>/dev/null); do
+    case "$(cat /proc/$p/comm 2>/dev/null)" in
+      terminal.exe|terminal64.exe) found=1; break ;;
+    esac
+  done
+  if [ "$found" = 0 ]; then echo "DRAIN{SEP}ok"; exit 0; fi
+  sleep 1
+done
+echo "DRAIN{SEP}timeout"
+exit 1
+"""
+
+
+def build_backup_script(data_dir: str, managed_paths: Iterable[str], ts: str) -> str:
+    """Tar the currently-present managed files **plus the manifest** into
+    ``<data_dir>/.mt4ctl/backups/<ts>.tar`` and prune to the newest 3.
+
+    A no-op (``BACKUP|none``) when nothing managed is present (first deploy).
+    """
+    dir_q = sh_quote(data_dir)
+    ts_q = sh_quote(ts)
+    adds = "\n".join(
+        f'[ -f "$DIR/"{sh_quote(p)} ] && printf \'%s\\n\' {sh_quote(p)} >> "$LIST"'
+        for p in managed_paths
+    )
+    return f"""\
+set -e
+DIR={dir_q}
+TS={ts_q}
+BK="$DIR/{BACKUP_DIR}"
+mkdir -p "$BK"
+LIST=$(mktemp)
+{adds}
+[ -f "$DIR/{MANIFEST_REL}" ] && printf '%s\\n' {sh_quote(MANIFEST_REL)} >> "$LIST"
+if [ -s "$LIST" ]; then
+  tar -C "$DIR" -cf "$BK/$TS.tar" -T "$LIST"
+  echo "BACKUP{SEP}$BK/$TS.tar"
+else
+  echo "BACKUP{SEP}none"
+fi
+rm -f "$LIST"
+ls -1t "$BK"/*.tar 2>/dev/null | tail -n +4 | while IFS= read -r old; do rm -f "$old"; done
+"""
+
+
+def _json_str(value: str) -> str:
+    """A bash single-quoted literal that *is* a JSON string (for manifest keys)."""
+    return sh_quote(json.dumps(value))
+
+
+def build_apply_script(
+    data_dir: str,
+    staging_dir: str,
+    place: Mapping[str, str],
+    remove_paths: Iterable[str],
+    manifest_paths: Iterable[str],
+    unit_user: str,
+) -> str:
+    """Verify staged files, place them atomically, remove dropped ones, then write
+    ``deployed.json`` LAST from the **on-disk** hashes — all owned by *unit_user*.
+
+    *place* maps each final relpath (also its path inside *staging_dir*) to its
+    expected sha256: every staged file is hashed and compared **before any move**,
+    so a truncated/corrupt upload aborts the apply before it mutates the tree.
+    *manifest_paths* is the full desired managed set (add+update+unchanged); the
+    manifest is rebuilt from what is actually on disk so it can never claim a file
+    that was not faithfully written. ``set -e`` aborts on the first failure.
+    """
+    dir_q = sh_quote(data_dir)
+    stg_q = sh_quote(staging_dir)
+    user_q = sh_quote(unit_user)
+    verify = "\n".join(
+        f'f={sh_quote(rel)}; got=$(sha "$STG/$f"); '
+        f'[ "$got" = {sh_quote(sha)} ] || {{ echo "APPLY{SEP}hashfail{SEP}$f"; exit 1; }}'
+        for rel, sha in place.items()
+    )
+    moves = "\n".join(
+        f'mkdir -p "$(dirname "$DIR/"{sh_quote(rel)})"; mv -f "$STG/"{sh_quote(rel)} "$DIR/"{sh_quote(rel)}'
+        for rel in place
+    )
+    removes = "\n".join(f'rm -f "$DIR/"{sh_quote(rel)}' for rel in remove_paths)
+    manifest_entries = "\n".join(
+        f'h=$(sha "$DIR/"{sh_quote(rel)}); '
+        f'[ "$FIRST" = 1 ] && FIRST=0 || printf \',\' >> "$TMP"; '
+        f'printf \'%s:"%s"\' {_json_str(rel)} "$h" >> "$TMP"'
+        for rel in manifest_paths
+    )
+    # chown every write + the private dir to the unit user so MT4 (running as that
+    # user) can persist `.chr`/`deployed.json` on exit. Best-effort: a no-op when
+    # apply already runs as that user, and skipped entirely for a root unit.
+    chown_targets = " ".join(
+        sh_quote(p) for p in [*place.keys(), MANIFEST_REL, MT4CTL_DIR]
+    )
+    return f"""\
+set -e
+{_SHA_FUNC}
+DIR={dir_q}
+STG="$DIR/"{stg_q}
+U={user_q}
+{verify}
+{moves}
+{removes}
+TMP=$(mktemp "$DIR/{MT4CTL_DIR}/dep.XXXXXX")
+FIRST=1
+printf '{{"version":1,"files":{{' > "$TMP"
+{manifest_entries}
+printf '}}}}' >> "$TMP"
+mv -f "$TMP" "$DIR/{MANIFEST_REL}"
+if [ "$U" != root ]; then
+  for t in {chown_targets}; do chown -R "$U" "$DIR/$t" 2>/dev/null || true; done
+fi
+echo "APPLY{SEP}ok"
+"""
+
+
+def build_lock_acquire_script(data_dir: str, holder_id: str, stale_s: int) -> str:
+    """Acquire the per-terminal deploy lock via an atomic ``mkdir`` of the lockdir.
+
+    Records *holder_id* + timestamp; fails (exit 1, ``LOCK|held``) when another
+    holder owns it, unless its timestamp is older than *stale_s* (a single-shot
+    deploy has no heartbeat, so *stale_s* must exceed the worst-case run).
+    """
+    dir_q = sh_quote(data_dir)
+    holder_q = sh_quote(holder_id)
+    return f"""\
+set +e
+DIR={dir_q}
+H={holder_q}
+LD="$DIR/{LOCKDIR}"
+mkdir -p "$DIR/{MT4CTL_DIR}"
+if mkdir "$LD" 2>/dev/null; then
+  printf '%s %s\\n' "$H" "$(date +%s)" > "$LD/owner"
+  echo "LOCK{SEP}acquired"; exit 0
+fi
+ts=$(awk '{{print $2}}' "$LD/owner" 2>/dev/null)
+now=$(date +%s)
+if [ -n "$ts" ] && [ $((now - ts)) -gt {int(stale_s)} ]; then
+  rm -rf "$LD"
+  if mkdir "$LD" 2>/dev/null; then
+    printf '%s %s\\n' "$H" "$now" > "$LD/owner"
+    echo "LOCK{SEP}takeover"; exit 0
+  fi
+fi
+echo "LOCK{SEP}held"; exit 1
+"""
+
+
+def build_lock_release_script(data_dir: str, holder_id: str) -> str:
+    """Release the deploy lock, but only if this *holder_id* still owns it."""
+    dir_q = sh_quote(data_dir)
+    holder_q = sh_quote(holder_id)
+    return f"""\
+set +e
+DIR={dir_q}
+H={holder_q}
+LD="$DIR/{LOCKDIR}"
+owner=$(awk '{{print $1}}' "$LD/owner" 2>/dev/null)
+if [ "$owner" = "$H" ]; then rm -rf "$LD"; echo "LOCK{SEP}released"; else echo "LOCK{SEP}notowner"; fi
+"""
+
+
+def build_restore_script(
+    data_dir: str,
+    backup_tar: str | None,
+    touched_paths: Iterable[str],
+    unit_user: str,
+) -> str:
+    """Internal restore on apply failure: purge *touched_paths* first (so a
+    brand-new file absent from the backup is removed), then — if *backup_tar* is
+    given — extract the pre-apply backup over the tree, owned by *unit_user*.
+
+    *backup_tar* is ``None`` on a first deploy (the backup was a no-op); the purge
+    alone then returns the terminal to its clean pre-deploy state. Best-effort
+    throughout (``set +e``): restore must attempt every step before ``start``.
+    """
+    dir_q = sh_quote(data_dir)
+    user_q = sh_quote(unit_user)
+    purges = "\n".join(f'rm -f "$DIR/"{sh_quote(p)}' for p in touched_paths)
+    extract = ""
+    if backup_tar is not None:
+        extract = f"""\
+tar -C "$DIR" -xf {sh_quote(backup_tar)} --no-same-owner 2>/dev/null
+if [ "$U" != root ]; then chown -R "$U" "$DIR/{MT4CTL_DIR}" 2>/dev/null || true; fi
+"""
+    return f"""\
+set +e
+DIR={dir_q}
+U={user_q}
+{purges}
+{extract}echo "RESTORE{SEP}done"
+"""
+
+
+def build_log_cursor_script(data_dir: str) -> str:
+    """Capture a pre-restart log cursor: ``CURSOR|<newest log path|>|<size>``.
+
+    Recorded *before* ``control start`` so verify can read only the lines a
+    restart produces, never a stale ``loaded`` from before the deploy.
+    """
+    dir_q = sh_quote(data_dir)
+    return f"""\
+set +e
+DIR={dir_q}
+log=$(ls -t "$DIR"/logs/*.log 2>/dev/null | head -1)
+if [ -z "$log" ]; then echo "CURSOR{SEP}{SEP}0"; else echo "CURSOR{SEP}$log{SEP}$(stat -c %s "$log" 2>/dev/null || echo 0)"; fi
+"""
+
+
+def build_log_since_script(data_dir: str, cursor_path: str, cursor_size: int) -> str:
+    """Emit the terminal log written since a cursor (rotation- & truncation-safe).
+
+    Reads the cursor file beyond *cursor_size* (or whole, if it shrank — a rotated/
+    truncated file), plus any log whose name sorts after the cursor's (MT4 rotates
+    to a new ``YYYYMMDD.log`` on restart, so lexical order is chronological). An
+    empty *cursor_path* (no log at capture time) reads every current log.
+    """
+    dir_q = sh_quote(data_dir)
+    cp_q = sh_quote(cursor_path)
+    return f"""\
+set +e
+DIR={dir_q}
+CP={cp_q}
+CS={int(cursor_size)}
+if [ -n "$CP" ] && [ -f "$CP" ]; then
+  sz=$(stat -c %s "$CP" 2>/dev/null || echo 0)
+  if [ "$sz" -ge "$CS" ]; then tail -c +$((CS + 1)) "$CP"; else cat "$CP"; fi
+fi
+cb=$(basename "$CP" 2>/dev/null)
+for f in "$DIR"/logs/*.log; do
+  [ -e "$f" ] || continue
+  bn=$(basename "$f")
+  if [ -z "$cb" ] || [ "$bn" \\> "$cb" ]; then cat "$f"; fi
+done
+"""
+
+
+def build_deploy_preflight_script(data_dir: str) -> str:
+    """Deploy-only host checks: GNU ``tar`` + a sha256 tool, and that the staging
+    namespace and the chart tree share one filesystem (atomic ``mv`` needs it).
+
+    Emits ``PRE|tar|<ok|missing>``, ``PRE|sha|<ok|missing>``, and
+    ``PRE|device|<ok|mismatch …>``. The orchestrator fails the deploy on any
+    non-ok line; doctor stays green for lifecycle-only users (these are not core
+    tools).
+    """
+    dir_q = sh_quote(data_dir)
+    return f"""\
+set +e
+DIR={dir_q}
+mkdir -p "$DIR/{MT4CTL_DIR}"
+if tar --version 2>/dev/null | grep -qi gnu; then echo "PRE{SEP}tar{SEP}ok"; else echo "PRE{SEP}tar{SEP}missing"; fi
+if command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || command -v openssl >/dev/null 2>&1; then
+  echo "PRE{SEP}sha{SEP}ok"
+else
+  echo "PRE{SEP}sha{SEP}missing"
+fi
+d1=$(stat -c %d "$DIR/{MT4CTL_DIR}" 2>/dev/null)
+ok=1; bad=""
+# Both managed trees receive atomic `mv`s from staging, so both must share the
+# staging device — not just the chart tree.
+for sub in profiles/default MQL4/Experts; do
+  ref="$DIR/$sub"; [ -d "$ref" ] || ref="$DIR"
+  d2=$(stat -c %d "$ref" 2>/dev/null)
+  if [ -z "$d1" ] || [ -z "$d2" ] || [ "$d1" != "$d2" ]; then ok=0; bad="$bad $sub=$d2"; fi
+done
+if [ "$ok" = 1 ]; then echo "PRE{SEP}device{SEP}ok"; else echo "PRE{SEP}device{SEP}mismatch staging=$d1 vs$bad"; fi
 """

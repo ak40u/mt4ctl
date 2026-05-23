@@ -89,6 +89,57 @@ def test_init_creates_private_file(monkeypatch, tmp_path):
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
 
 
+def test_deploy_parses_args_and_calls_operation(monkeypatch, tmp_path, capsys):
+    _use_registry(monkeypatch, tmp_path)
+    from mt4ctl import operations
+    from mt4ctl.models import DeployPlan, DeployResult
+
+    captured = {}
+
+    async def fake_deploy(registry, terminal, bundle, *, dry_run, confirm):
+        captured.update(terminal=terminal, bundle=bundle, dry_run=dry_run, confirm=confirm)
+        return DeployResult(
+            terminal=terminal,
+            plan=DeployPlan(add=("MQL4/Experts/A.ex4",)),
+            backup_path=None,
+            restarted=False,
+            verify_ok=False,
+            verify_detail="dry-run (nothing applied)",
+            dry_run=True,
+        )
+
+    monkeypatch.setattr(operations, "deploy", fake_deploy)
+    monkeypatch.setattr("sys.argv", ["mt4ctl", "deploy", "t1", "/path/bundle", "--dry-run", "--confirm"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 0
+    assert captured == {"terminal": "t1", "bundle": "/path/bundle", "dry_run": True, "confirm": True}
+    assert "plan: +1" in capsys.readouterr().out
+
+
+def test_deploy_reports_error_with_exit_1(monkeypatch, tmp_path, capsys):
+    _use_registry(monkeypatch, tmp_path)
+    from mt4ctl import operations
+    from mt4ctl.errors import BundleError
+
+    async def boom(registry, terminal, bundle, *, dry_run, confirm):
+        raise BundleError("bundle directory not found: '/nope'")
+
+    monkeypatch.setattr(operations, "deploy", boom)
+    monkeypatch.setattr("sys.argv", ["mt4ctl", "deploy", "t1", "/nope"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    assert "bundle directory not found" in capsys.readouterr().err
+
+
+def test_deploy_missing_args_errors(monkeypatch, tmp_path):
+    monkeypatch.setattr("sys.argv", ["mt4ctl", "deploy", "t1"])  # missing bundle
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 2  # argparse usage error
+
+
 def test_doctor_runs_and_sets_exit_code(monkeypatch, tmp_path, capsys):
     _use_registry(monkeypatch, tmp_path)
 

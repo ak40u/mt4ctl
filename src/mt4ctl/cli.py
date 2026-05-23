@@ -85,6 +85,28 @@ def _cmd_doctor() -> int:
     return 1 if any(c.status == "fail" for c in checks) else 0
 
 
+def _cmd_deploy(terminal: str, bundle: str, *, dry_run: bool, confirm: bool) -> int:
+    try:
+        registry = load_registry()
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    # No shared async runner exists (only _cmd_doctor uses asyncio.run), so wrap
+    # the op here exactly as _cmd_doctor does — keeps deploy debuggable sans MCP.
+    from . import operations
+    from .server import _fmt_deploy_plan, _fmt_deploy_result
+
+    try:
+        result = asyncio.run(
+            operations.deploy(registry, terminal, bundle, dry_run=dry_run, confirm=confirm)
+        )
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    print(_fmt_deploy_plan(result.plan) if result.dry_run else _fmt_deploy_result(result))
+    return 0
+
+
 def _cmd_init(path: str | None) -> int:
     target = (
         Path(path).expanduser()
@@ -126,6 +148,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("doctor", help="check registry, SSH, remote tools, units")
     p_init = sub.add_parser("init", help="write a starter terminals.yaml")
     p_init.add_argument("path", nargs="?", help="where to write (default: XDG config path)")
+    p_deploy = sub.add_parser("deploy", help="deploy a strategy bundle to a terminal")
+    p_deploy.add_argument("terminal", help="terminal id")
+    p_deploy.add_argument("bundle", help="local bundle directory (profiles/default + MQL4/Experts)")
+    p_deploy.add_argument("--dry-run", action="store_true", help="preview the plan; change nothing")
+    p_deploy.add_argument("--confirm", action="store_true", help="required for env=live terminals")
     return parser
 
 
@@ -140,6 +167,10 @@ def main() -> None:
         raise SystemExit(_cmd_doctor())
     if command == "init":
         raise SystemExit(_cmd_init(args.path))
+    if command == "deploy":
+        raise SystemExit(
+            _cmd_deploy(args.terminal, args.bundle, dry_run=args.dry_run, confirm=args.confirm)
+        )
     raise SystemExit(2)  # unreachable; argparse rejects unknown commands
 
 

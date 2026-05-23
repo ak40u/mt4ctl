@@ -8,12 +8,13 @@ cli.py           console entry point — serve (default) / list / doctor / init
    │
 server.py        MCP tool definitions (FastMCP) — one thin wrapper per tool
    │
-   ├── operations.py   status · logs · screenshot · control · experts · info
+   ├── operations.py   status · logs · screenshot · control · experts · info · deploy
    ├── login.py        headless first-login bootstrap
    ├── diagnostics.py  doctor checks (registry, SSH, tools, units, connections)
+   ├── deploy.py       pure deploy core — bundle read, member allowlist, reconcile diff
    │
    ├── scripts.py      pure bash builders (no I/O) ── the only place shell lives
-   ├── ssh.py          async SSH transport (base64-framed), native + WSL
+   ├── ssh.py          async SSH transport (base64-framed) + put_tar upload, native + WSL
    ├── auth.py         credential resolution chain
    ├── config.py       YAML → Registry, with validation
    ├── models.py       Host · Terminal · Registry · TerminalStatus · Expert … (dataclasses)

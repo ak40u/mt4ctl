@@ -1,12 +1,16 @@
-"""Status parsing and the live-confirmation guard."""
+"""Status parsing, the live-confirmation guard, and deploy orchestration."""
 
 from __future__ import annotations
+
+import base64
+import json
 
 import pytest
 
 from mt4ctl import operations, ssh
-from mt4ctl.errors import ConfirmationRequiredError
+from mt4ctl.errors import ConfirmationRequiredError, DeployError
 from mt4ctl.operations import _parse_status_line
+from mt4ctl.ssh import CommandResult
 
 
 def _term(registry, tid):
@@ -165,3 +169,283 @@ async def test_logs_surfaces_ssh_failure(registry, monkeypatch):
     assert "cannot read logs for demo1" in out
     assert "SSH to host" in out
     assert "(no output)" not in out
+
+
+# --------------------------------------------------------------------------- #
+# Deploy orchestration
+# --------------------------------------------------------------------------- #
+def _make_bundle(tmp_path):
+    """A minimal bundle: one chart -> one expert."""
+    root = tmp_path / "bundle"
+    (root / "profiles" / "default").mkdir(parents=True)
+    (root / "MQL4" / "Experts" / "SQ").mkdir(parents=True)
+    (root / "profiles" / "default" / "a.chr").write_text(
+        "<chart>\r\n<expert>\r\nname=SQ\\Strat\r\n</expert>\r\nflags=343\r\n"
+    )
+    (root / "MQL4" / "Experts" / "SQ" / "Strat.ex4").write_bytes(b"EX4-binary")
+    return root
+
+
+def _manifest_b64(files: dict[str, str]) -> str:
+    return base64.b64encode(json.dumps({"version": 1, "files": files}).encode()).decode()
+
+
+class FakeSSH:
+    """Records the order of remote calls and serves canned, per-step output."""
+
+    def __init__(self, term_id, *, manifest="MISSING", dest=None, charts=None, user="trader",
+                 drain="ok", apply="ok", service="active", connected="2", log_text=""):
+        self.term_id = term_id
+        self.manifest = manifest
+        self.dest = dest or {}
+        self.charts = charts or {}
+        self.user = user
+        self.drain = drain
+        self.apply = apply
+        self.service = service
+        self.connected = connected
+        self.log_text = log_text
+        self.calls: list[str] = []
+        self.put_calls: list[str] = []
+        self.apply_scripts: list[str] = []
+
+    def _classify(self, s: str) -> str:
+        if "tar --version" in s:
+            return "preflight"
+        if 'mkdir "$LD"' in s:
+            return "lock_acquire"
+        if "notowner" in s:
+            return "lock_release"
+        if '"version":1' in s:
+            return "apply"
+        if 'echo "RESTORE' in s:
+            return "restore"
+        if 'echo "BACKUP' in s:
+            return "backup"
+        if 'echo "DRAIN' in s:
+            return "drain"
+        if 'echo "CURSOR' in s:
+            return "cursor"
+        if "tail -c +" in s:
+            return "log_since"
+        if "emit_dest" in s:
+            return "remote_state"
+        if "systemctl stop" in s:
+            return "stop"
+        if "systemctl start" in s:
+            return "start"
+        if "BROKER=" in s:
+            return "status"
+        if "no log files" in s:
+            return "logs"
+        return "other"
+
+    def _remote_state_out(self) -> str:
+        lines = [f"USER{operations.scripts.SEP}{self.user}", f"MANIFEST|{self.manifest}"]
+        for rel, name in self.charts.items():
+            lines.append(f"CHART|{rel}|{name}")
+        for rel, h in self.dest.items():
+            lines.append(f"DEST|{rel}|1|{h}" if h else f"DEST|{rel}|0|-")
+        return "\n".join(lines) + "\n"
+
+    async def run(self, host, script, **kw):
+        label = self._classify(script)
+        self.calls.append(label)
+        if label == "apply":
+            self.apply_scripts.append(script)
+            if self.apply != "ok":
+                from mt4ctl.errors import RemoteCommandError
+
+                raise RemoteCommandError(host.id, 2, "apply failed")
+        out = {
+            "lock_acquire": "LOCK|acquired\n",
+            "lock_release": "LOCK|released\n",
+            "preflight": "PRE|tar|ok\nPRE|sha|ok\nPRE|device|ok\n",
+            "remote_state": self._remote_state_out(),
+            "drain": f"DRAIN|{self.drain}\n",
+            "backup": "BACKUP|/d/.mt4ctl/backups/ts.tar\n",
+            "apply": "APPLY|ok\n",
+            "restore": "RESTORE|done\n",
+            "cursor": "CURSOR|/d/logs/20260523.log|100\n",
+            "stop": "STATE|inactive|rc=0\n",
+            "start": "STATE|active|rc=0\n",
+            "status": f"TERM|{self.term_id}|{self.service}|5|{self.connected}|ok\n",
+            "log_since": self.log_text,
+            "logs": self.log_text,
+        }.get(label, "")
+        return CommandResult(0, out, "")
+
+    async def put_tar(self, host, tar_bytes, dest, **kw):
+        self.put_calls.append(dest)
+
+
+def _install(monkeypatch, fake):
+    monkeypatch.setattr(ssh, "run", fake.run)
+    monkeypatch.setattr(ssh, "put_tar", fake.put_tar)
+
+
+def _order(calls, *labels):
+    """True if *labels* appear as an ordered subsequence of *calls*."""
+    it = iter(calls)
+    return all(any(c == lbl for c in it) for lbl in labels)
+
+
+async def test_deploy_live_gate_no_remote_contact(registry, monkeypatch):
+    async def boom(*a, **k):
+        raise AssertionError("no SSH before the live gate")
+
+    monkeypatch.setattr(ssh, "run", boom)
+    monkeypatch.setattr(ssh, "put_tar", boom)
+    with pytest.raises(ConfirmationRequiredError):
+        await operations.deploy(registry, "live-main", "/nonexistent", confirm=False)
+
+
+async def test_deploy_dry_run_no_lock_no_mutation(registry, monkeypatch, tmp_path):
+    fake = FakeSSH("demo1")
+    _install(monkeypatch, fake)
+    result = await operations.deploy(registry, "demo1", _make_bundle(tmp_path), dry_run=True)
+    assert result.dry_run is True
+    assert set(result.plan.add) == {
+        "MQL4/Experts/SQ/Strat.ex4",
+        "profiles/default/a.chr",
+    }
+    assert fake.calls == ["remote_state"]  # no lock, stop, put_tar, apply
+    assert fake.put_calls == []
+
+
+async def test_deploy_happy_path_call_order(registry, monkeypatch, tmp_path):
+    fake = FakeSSH("demo1", log_text="Experts\tStrat: loaded successfully\n")
+    _install(monkeypatch, fake)
+    result = await operations.deploy(registry, "demo1", _make_bundle(tmp_path))
+    # lock BEFORE state read; backup before upload; start before release
+    assert _order(
+        fake.calls,
+        "lock_acquire", "remote_state", "stop", "drain", "backup", "apply",
+        "start", "lock_release",
+    )
+    assert fake.put_calls and ".mt4ctl/staging/" in fake.put_calls[0]
+    # put_tar happens between backup and apply
+    assert fake.calls.index("backup") < fake.calls.index("apply")
+    assert result.restarted is True
+    assert result.verify_ok is True
+
+
+async def test_deploy_empty_diff_skips_mutation_but_verifies(registry, monkeypatch, tmp_path):
+    bundle = _make_bundle(tmp_path)
+    files, _ = operations.deploy_core.read_bundle(bundle)
+    fake = FakeSSH(
+        "demo1",
+        manifest=_manifest_b64(files),
+        dest=dict(files),  # every dest present with the bundle hash -> unchanged
+        log_text="Experts\tStrat: loaded successfully\n",
+    )
+    _install(monkeypatch, fake)
+    result = await operations.deploy(registry, "demo1", bundle)
+    assert result.plan.has_changes is False
+    assert "stop" not in fake.calls and "start" not in fake.calls
+    assert "apply" not in fake.calls
+    assert "lock_acquire" in fake.calls and "lock_release" in fake.calls
+    assert result.verify_detail  # health still reported
+
+
+async def test_deploy_drain_abort_does_not_apply_but_restarts(registry, monkeypatch, tmp_path):
+    fake = FakeSSH("demo1", drain="timeout")
+    _install(monkeypatch, fake)
+    with pytest.raises(DeployError, match="did not exit"):
+        await operations.deploy(registry, "demo1", _make_bundle(tmp_path))
+    assert "apply" not in fake.calls
+    assert "start" in fake.calls  # finally still brings it back
+    assert "lock_release" in fake.calls
+
+
+async def test_deploy_apply_failure_restores_before_start(registry, monkeypatch, tmp_path):
+    fake = FakeSSH("demo1", apply="fail")
+    _install(monkeypatch, fake)
+    with pytest.raises(DeployError, match="restored"):
+        await operations.deploy(registry, "demo1", _make_bundle(tmp_path))
+    assert _order(fake.calls, "apply", "restore", "start", "lock_release")
+
+
+async def test_deploy_pre_stop_failure_does_not_start(registry, monkeypatch, tmp_path):
+    # an unmanaged-collision is detected pre-stop -> refuse before any mutation
+    bundle = _make_bundle(tmp_path)
+    files, _ = operations.deploy_core.read_bundle(bundle)
+    fake = FakeSSH("demo1", manifest="MISSING", dest=dict.fromkeys(files, "abc123"))  # present, unmanaged
+    _install(monkeypatch, fake)
+    with pytest.raises(DeployError, match="does not manage"):
+        await operations.deploy(registry, "demo1", bundle)
+    assert "stop" not in fake.calls
+    assert "start" not in fake.calls
+    assert "lock_release" in fake.calls  # lock still released
+
+
+async def test_deploy_confirm_forwarded_to_control_on_live(registry, monkeypatch, tmp_path):
+    fake = FakeSSH("live-main", log_text="Experts\tStrat: loaded\n")
+    _install(monkeypatch, fake)
+    # confirm=True must reach control's stop/start so the live-gate is not re-tripped
+    result = await operations.deploy(registry, "live-main", _make_bundle(tmp_path), confirm=True)
+    assert "stop" in fake.calls and "start" in fake.calls
+    assert result.restarted is True
+
+
+async def test_deploy_recompute_after_drain_reclassifies_chr(registry, monkeypatch, tmp_path):
+    bundle = _make_bundle(tmp_path)
+    files, _ = operations.deploy_core.read_bundle(bundle)
+    chr_rel = "profiles/default/a.chr"
+    # First state read: manifest matches bundle for the .chr (would be "unchanged");
+    # the post-drain re-read returns a DIFFERENT .chr hash (MT4 rewrote it on exit).
+    seq = {"n": 0}
+    fake = FakeSSH("demo1", manifest=_manifest_b64(files), dest=dict(files),
+                   log_text="Experts\tStrat: loaded\n")
+    orig = fake._remote_state_out
+
+    def staged_state():
+        seq["n"] += 1
+        if seq["n"] == 1:
+            return orig()  # pre-stop: everything matches -> unchanged
+        # post-drain: the chart's on-disk hash changed
+        d = dict(files)
+        d[chr_rel] = "rewritten_by_mt4_on_exit"
+        return "\n".join(
+            ["USER|trader", f"MANIFEST|{_manifest_b64(files)}"]
+            + [f"DEST|{r}|1|{h}" for r, h in d.items()]
+        ) + "\n"
+
+    fake._remote_state_out = staged_state
+    _install(monkeypatch, fake)
+    result = await operations.deploy(registry, "demo1", bundle)
+    # the chart, "unchanged" pre-stop, is reclassified update after drain
+    assert chr_rel in result.plan.update
+
+
+async def test_deploy_verify_under_lock_release_after_verify(registry, monkeypatch, tmp_path):
+    fake = FakeSSH("demo1", log_text="Experts\tStrat: loaded\n")
+    _install(monkeypatch, fake)
+    await operations.deploy(registry, "demo1", _make_bundle(tmp_path))
+    # the verify status read + log read must precede lock release
+    last_status = max(i for i, c in enumerate(fake.calls) if c in ("status", "log_since"))
+    assert last_status < fake.calls.index("lock_release")
+
+
+async def test_deploy_verify_fails_when_ea_load_missing(registry, monkeypatch, tmp_path):
+    fake = FakeSSH("demo1", log_text="nothing relevant in the log\n")
+    _install(monkeypatch, fake)
+    result = await operations.deploy(registry, "demo1", _make_bundle(tmp_path))
+    assert result.verify_ok is False
+    assert "not confirmed" in result.verify_detail
+
+
+async def test_deploy_apply_runs_as_unit_user(registry, monkeypatch, tmp_path):
+    fake = FakeSSH("demo1", user="pavel", log_text="Experts\tStrat: loaded\n")
+    _install(monkeypatch, fake)
+    await operations.deploy(registry, "demo1", _make_bundle(tmp_path))
+    assert fake.apply_scripts and "U='pavel'" in fake.apply_scripts[0]
+
+
+async def test_deploy_verify_inconclusive_connection_not_failed(registry, monkeypatch, tmp_path):
+    # connected unknown (-1) must not flip verify to False on its own
+    fake = FakeSSH("demo1", connected="-1", log_text="Experts\tStrat: loaded\n")
+    _install(monkeypatch, fake)
+    result = await operations.deploy(registry, "demo1", _make_bundle(tmp_path))
+    assert result.verify_ok is True
+    assert "inconclusive" in result.verify_detail

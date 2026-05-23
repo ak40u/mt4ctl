@@ -121,3 +121,140 @@ def test_screenshot_script_activates_window_when_query_given():
 def test_screenshot_script_skips_activate_without_query():
     out = scripts.build_screenshot_script(":0", None, "/tmp/x.png")
     assert "xdotool search" not in out
+
+
+# --------------------------------------------------------------------------- #
+# Deploy builders
+# --------------------------------------------------------------------------- #
+def test_remote_state_emits_user_manifest_charts_and_dest_stats():
+    out = scripts.build_remote_state_script(
+        "/home/t/d", ["MQL4/Experts/A.ex4", "profiles/default/a.chr"], "mt4-x"
+    )
+    assert "systemctl show -p User --value \"$UNIT\"" in out
+    assert "[ -z \"$U\" ] && U=root" in out  # empty User= -> root
+    assert "UNIT='mt4-x'" in out
+    assert f"$DIR/{scripts.MANIFEST_REL}" in out
+    assert "MANIFEST|MISSING" in out
+    assert "base64" in out  # manifest shipped base64 (binary-safe)
+    assert "profiles/default/*.chr" in out  # live chart enumeration
+    assert "emit_dest 'MQL4/Experts/A.ex4'" in out
+    assert "emit_dest 'profiles/default/a.chr'" in out
+    assert "DEST|" in out and "CHART|" in out
+
+
+def test_remote_state_quotes_dangerous_data_dir():
+    out = scripts.build_remote_state_script("x$(touch /tmp/pwn)", [], "u")
+    assert "DIR='x$(touch /tmp/pwn)'" in out
+
+
+def test_drain_polls_cgroup_and_fails_on_persisting_proc():
+    out = scripts.build_drain_script("mt4-x", 20)
+    assert "cgroup.procs" in out
+    assert "terminal.exe|terminal64.exe" in out
+    assert "DRAIN|ok" in out
+    assert "DRAIN|timeout" in out
+    assert "exit 1" in out  # caller aborts apply on persisting process
+    assert "seq 1 20" in out
+
+
+def test_backup_includes_manifest_and_prunes_to_three():
+    out = scripts.build_backup_script("/home/t/d", ["MQL4/Experts/A.ex4"], "20260523-0000")
+    assert "-T \"$LIST\"" in out  # tar from the gathered file list
+    assert scripts.MANIFEST_REL in out  # manifest tarred alongside managed files
+    assert "TS='20260523-0000'" in out and '"$BK/$TS.tar"' in out
+    assert "tail -n +4" in out  # keep newest 3
+    assert "'MQL4/Experts/A.ex4'" in out  # path quoted
+
+
+def test_backup_noop_when_nothing_managed():
+    out = scripts.build_backup_script("/home/t/d", [], "ts")
+    assert "BACKUP|none" in out
+
+
+def test_apply_verifies_staged_hashes_before_move_and_writes_manifest_last():
+    place = {"MQL4/Experts/A.ex4": "deadbeef", "profiles/default/a.chr": "cafe"}
+    out = scripts.build_apply_script(
+        "/home/t/d",
+        f"{scripts.STAGING_DIR}/u1",
+        place,
+        ["MQL4/Experts/Old.ex4"],
+        ["MQL4/Experts/A.ex4", "profiles/default/a.chr"],
+        "trader",
+    )
+    # staged-hash verification appears, and its abort precedes any mv in the text
+    assert "APPLY|hashfail" in out
+    assert '[ "$got" = \'deadbeef\' ]' in out
+    hashfail_at = out.index("APPLY|hashfail")
+    first_mv = out.index("mv -f")
+    assert hashfail_at < first_mv  # verify-before-move
+    # manifest written from on-disk hashes, LAST (after the moves/removes)
+    assert out.index("mv -f") < out.index('"version":1')
+    assert "rm -f \"$DIR/\"'MQL4/Experts/Old.ex4'" in out
+    assert 'mv -f "$TMP" "$DIR/' + scripts.MANIFEST_REL in out
+    # chown to the unit user (so MT4 can rewrite on exit)
+    assert "chown -R \"$U\"" in out
+    assert "U='trader'" in out
+
+
+def test_apply_skips_chown_for_root_unit():
+    out = scripts.build_apply_script("/d", "s", {}, [], [], "root")
+    assert '[ "$U" != root ]' in out  # chown guarded out when unit runs as root
+
+
+def test_apply_quotes_filenames_with_shell_metacharacters():
+    # a hostile/odd .ex4 name must never break out of the script or its quoting
+    import subprocess
+
+    evil = 'MQL4/Experts/a";id #.ex4'
+    out = scripts.build_apply_script(
+        "/home/t/d", "stg", {evil: "h"}, [evil], [evil], "trader"
+    )
+    assert 'echo "APPLY|hashfail|$f"' in out  # message uses a quoted var, never raw rel
+    # every occurrence of the name is single-quoted (sh_quote or json+sh_quote);
+    # a clean `bash -n` parse proves no metacharacter escapes its quoting.
+    assert subprocess.run(["bash", "-n"], input=out.encode()).returncode == 0
+
+
+def test_lock_acquire_is_atomic_mkdir_with_stale_takeover():
+    out = scripts.build_lock_acquire_script("/home/t/d", "host:1234", 600)
+    assert 'mkdir "$LD"' in out  # atomic mkdir lock
+    assert scripts.LOCKDIR in out
+    assert "LOCK|acquired" in out
+    assert "LOCK|held" in out
+    assert "LOCK|takeover" in out
+    assert "- ts)) -gt 600" in out  # stale threshold
+    assert "H='host:1234'" in out
+
+
+def test_lock_release_only_when_owner_matches():
+    out = scripts.build_lock_release_script("/home/t/d", "host:1234")
+    assert 'owner=$(awk' in out
+    assert '[ "$owner" = "$H" ]' in out
+    assert "LOCK|released" in out
+    assert "LOCK|notowner" in out
+
+
+def test_restore_purges_touched_then_extracts_backup():
+    out = scripts.build_restore_script(
+        "/home/t/d", "/home/t/d/.mt4ctl/backups/ts.tar", ["MQL4/Experts/New.ex4"], "trader"
+    )
+    rm_at = out.index("rm -f \"$DIR/\"'MQL4/Experts/New.ex4'")
+    tar_at = out.index("tar -C \"$DIR\" -xf")
+    assert rm_at < tar_at  # purge touched paths BEFORE re-extracting backup
+    assert "--no-same-owner" in out and "--no-absolute-names" not in out
+    assert "RESTORE|done" in out
+
+
+def test_restore_purge_only_when_no_backup():
+    out = scripts.build_restore_script("/home/t/d", None, ["MQL4/Experts/New.ex4"], "trader")
+    assert "rm -f \"$DIR/\"'MQL4/Experts/New.ex4'" in out
+    assert "tar -C" not in out  # first deploy: nothing to extract, purge only
+    assert "RESTORE|done" in out
+
+
+def test_deploy_preflight_checks_tar_sha_and_same_device():
+    out = scripts.build_deploy_preflight_script("/home/t/d")
+    assert "tar --version" in out and "grep -qi gnu" in out
+    assert "sha256sum" in out and "openssl" in out
+    assert "stat -c %d" in out
+    assert "PRE|tar|" in out and "PRE|sha|" in out and "PRE|device|" in out

@@ -6,6 +6,24 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `mt4_deploy` — idempotent, managed-subset strategy deploy ("kubectl-apply for
+  one terminal"): push a local bundle of ready `.chr` charts + `.ex4` experts and
+  reconcile a terminal to it. Touches only what mt4ctl deployed (tracked in
+  `.mt4ctl/deployed.json`); foreign files (e.g. a watchdog's chart) are left
+  untouched, and a bundle file that would overwrite an unmanaged file is refused.
+  Write order is **stop → drain → backup → apply → start** (MT4 rewrites `.chr` on
+  exit, so nothing is written until `terminal.exe` is gone, and a stopped terminal
+  is always restarted); files are written as the unit's own user; a per-terminal
+  lockdir serializes concurrent deploys. A pre-apply backup is kept and restored
+  internally on apply failure (no `mt4_rollback` — recover by re-deploying the
+  previous bundle). Verify is report-only (service + broker + EA-load lines from
+  the log). Exposed via the `mt4_deploy` MCP tool and `mt4ctl deploy` CLI.
+- `ssh.put_tar` — binary-safe SSH upload primitive (raw tar streamed to a remote
+  `tar -x` over stdin), verified byte-identical through the WSL `cmd.exe → wsl.exe
+  → bash` chain.
+
 ## [0.3.0] - 2026-05-23
 
 ### Added

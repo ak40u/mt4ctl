@@ -45,3 +45,14 @@ class ConfirmationRequiredError(Mt4ctlError):
 
 class CredentialError(Mt4ctlError):
     """A credential could not be resolved for a login operation."""
+
+
+class BundleError(Mt4ctlError):
+    """A local deploy bundle is malformed: a chart references a missing EA, or a
+    file path falls outside the managed-member allowlist (``..``/absolute/symlink/
+    wrong location)."""
+
+
+class DeployError(Mt4ctlError):
+    """A deploy cannot proceed safely: the remote manifest is corrupt, or a bundle
+    file would overwrite an unmanaged remote file. Raised *before* any mutation."""

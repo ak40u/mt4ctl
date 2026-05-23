@@ -157,6 +157,50 @@ class TerminalInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class DeployPlan:
+    """The reconcile diff between a local bundle and a terminal's managed state.
+
+    Every field is a tuple of POSIX-relative paths (the canonical member identity
+    shared across the deploy pipeline). ``foreign`` files are present on the host
+    but outside mt4ctl's managed scope (e.g. a watchdog ``.chr``) and are left
+    untouched. ``conflicts`` are bundle paths that would overwrite an *unmanaged*
+    remote file — they make the deploy refuse before any mutation. ``notes``
+    carries drift / refusal / ambiguity explanations for the report.
+    """
+
+    add: tuple[str, ...] = ()
+    update: tuple[str, ...] = ()
+    remove: tuple[str, ...] = ()
+    unchanged: tuple[str, ...] = ()
+    foreign: tuple[str, ...] = ()
+    conflicts: tuple[str, ...] = ()
+    notes: tuple[str, ...] = ()
+
+    @property
+    def has_changes(self) -> bool:
+        """Whether applying this plan would mutate the terminal."""
+        return bool(self.add or self.update or self.remove)
+
+
+@dataclass(frozen=True, slots=True)
+class DeployResult:
+    """Outcome of a deploy: the plan, the backup taken, and the verify report.
+
+    ``verify_ok`` reflects a *report-only* health check (service active + broker
+    connection + EA-load lines in the log); a failed verify never reverts a
+    deploy. ``backup_path`` is ``None`` on a first deploy (nothing to back up).
+    """
+
+    terminal: str
+    plan: DeployPlan
+    backup_path: str | None
+    restarted: bool
+    verify_ok: bool
+    verify_detail: str
+    dry_run: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class Registry:
     """The full set of configured hosts and terminals."""
 

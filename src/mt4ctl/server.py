@@ -19,7 +19,7 @@ from . import diagnostics, operations
 from . import login as login_mod
 from .config import load_registry
 from .errors import Mt4ctlError
-from .models import Registry, TerminalStatus
+from .models import DeployPlan, DeployResult, Registry, TerminalStatus
 
 mcp = FastMCP(
     "mt4ctl",
@@ -101,6 +101,59 @@ def _fmt_status(rows: list[TerminalStatus]) -> str:
         lines.append("\nnext steps:")
         for (reason, action), ids in next_steps.items():
             lines.append(f"  {reason} ({', '.join(ids)}): {action}")
+    return "\n".join(lines)
+
+
+def _fmt_deploy_plan(plan: DeployPlan) -> str:
+    """Render a (dry-run) plan: what would change, what stays foreign, why."""
+    lines: list[str] = []
+    for label, items in (("add", plan.add), ("update", plan.update), ("remove", plan.remove)):
+        if items:
+            lines.append(f"{label} ({len(items)}):")
+            lines.extend(f"  {p}" for p in items)
+    if plan.unchanged:
+        lines.append(f"unchanged: {len(plan.unchanged)}")
+    if plan.foreign:
+        lines.append(f"foreign — left untouched ({len(plan.foreign)}):")
+        lines.extend(f"  {p}" for p in plan.foreign)
+    if plan.conflicts:
+        lines.append(f"REFUSED — would overwrite files mt4ctl does not manage ({len(plan.conflicts)}):")
+        lines.extend(f"  {p}" for p in plan.conflicts)
+        lines.append("  next: remove/rename them on the host, or drop them from the bundle")
+    if plan.notes:
+        lines.append("notes:")
+        lines.extend(f"  - {n}" for n in plan.notes)
+    header = (
+        f"plan: +{len(plan.add)} ~{len(plan.update)} -{len(plan.remove)}"
+        if plan.has_changes or plan.conflicts
+        else "no changes — terminal already matches the bundle"
+    )
+    return header + ("\n" + "\n".join(lines) if lines else "")
+
+
+def _fmt_deploy_result(result: DeployResult) -> str:
+    """Render an applied deploy: counts, backup, restart, and the verify report."""
+    p = result.plan
+    lines = [
+        f"{result.terminal}: deployed +{len(p.add)} ~{len(p.update)} -{len(p.remove)} "
+        f"(unchanged {len(p.unchanged)})"
+    ]
+    if p.foreign:
+        lines.append(f"foreign left untouched: {len(p.foreign)}")
+    if result.backup_path:
+        lines.append(f"backup: {result.backup_path}")
+    lines.append(
+        "restarted: yes" if result.restarted else "restarted: NO — run `mt4_control <id> start`"
+    )
+    lines.append(f"verify: {'ok' if result.verify_ok else 'NOT confirmed'} ({result.verify_detail})")
+    if not result.verify_ok:
+        lines.append(
+            "  note: verify is report-only and did NOT revert the deploy; "
+            "check `mt4_logs`/`mt4_status`. Recovery = re-deploy the previous bundle."
+        )
+    if p.notes:
+        lines.append("notes:")
+        lines.extend(f"  - {n}" for n in p.notes)
     return "\n".join(lines)
 
 
@@ -318,6 +371,43 @@ async def mt4_info(terminal: str = "all") -> str:
         ping = "-" if i.ping_ms is None else f"{i.ping_ms:.0f}ms"
         lines.append(f"{i.terminal:<12} {(i.build or '-'):<22} {(i.server or '-'):<18} {ping}")
     return "\n".join(lines)
+
+
+@mcp.tool()
+@_guard
+async def mt4_deploy(
+    terminal: str, bundle: str, dry_run: bool = False, confirm: bool = False
+) -> str:
+    """Deploy a strategy bundle to a terminal — idempotent, managed-subset.
+
+    Pushes pre-built charts + experts so the terminal's *managed* files match the
+    bundle, while leaving foreign files (e.g. a watchdog's chart) untouched. This
+    is apply-only: it does NOT select strategies, set lots/magic, generate charts,
+    or compile — the caller owns the bundle's contents.
+
+    `bundle` is a LOCAL directory on this machine (read here and pushed over SSH —
+    NOT a path on the remote host). It mirrors the MT4 layout:
+
+        <bundle>/
+          profiles/default/<name>.chr        # ready charts (one expert each)
+          MQL4/Experts/<folder>/<ea>.ex4     # the experts those charts reference
+
+    Always run with dry_run=true first to preview the add/update/remove/foreign
+    plan. Re-running the same bundle is a no-op (reports "no changes"). A terminal
+    tagged env=live requires confirm=true. There is no rollback command: to
+    recover, re-deploy the previous bundle (a pre-apply backup is also retained
+    and is restored automatically if an apply fails).
+
+    Args:
+        terminal: terminal id.
+        bundle: local bundle directory path.
+        dry_run: preview the plan without changing anything (no lock, no upload).
+        confirm: must be true to deploy to a terminal tagged env=live.
+    """
+    result = await operations.deploy(
+        registry(), terminal, bundle, dry_run=dry_run, confirm=confirm
+    )
+    return _fmt_deploy_plan(result.plan) if result.dry_run else _fmt_deploy_result(result)
 
 
 def serve() -> None:

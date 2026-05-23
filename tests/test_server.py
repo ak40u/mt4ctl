@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 
 from mt4ctl.errors import Mt4ctlError
-from mt4ctl.models import Env, TerminalStatus
-from mt4ctl.server import _fmt_status, _guard
+from mt4ctl.models import DeployPlan, DeployResult, Env, TerminalStatus
+from mt4ctl.server import _fmt_deploy_plan, _fmt_deploy_result, _fmt_status, _guard
 
 
 def _status(**kw):
@@ -98,3 +98,83 @@ async def test_guard_does_not_swallow_unexpected_errors():
 
     with pytest.raises(RuntimeError):
         await boom()
+
+
+# --------------------------------------------------------------------------- #
+# Deploy formatters + tool registration
+# --------------------------------------------------------------------------- #
+def test_fmt_deploy_plan_lists_changes_and_foreign():
+    plan = DeployPlan(
+        add=("MQL4/Experts/A.ex4",),
+        update=("profiles/default/a.chr",),
+        unchanged=("MQL4/Experts/B.ex4",),
+        foreign=("profiles/default/watchdog.chr",),
+        notes=("drift: a.chr changed on host",),
+    )
+    out = _fmt_deploy_plan(plan)
+    assert "plan: +1 ~1 -0" in out
+    assert "MQL4/Experts/A.ex4" in out
+    assert "unchanged: 1" in out
+    assert "watchdog.chr" in out and "left untouched" in out
+    assert "drift" in out
+
+
+def test_fmt_deploy_plan_no_changes():
+    assert "no changes" in _fmt_deploy_plan(DeployPlan())
+
+
+def test_fmt_deploy_plan_conflicts_refused():
+    out = _fmt_deploy_plan(DeployPlan(conflicts=("MQL4/Experts/X.ex4",)))
+    assert "REFUSED" in out
+    assert "MQL4/Experts/X.ex4" in out
+    assert "drop them from the bundle" in out
+
+
+def test_fmt_deploy_result_ok():
+    res = DeployResult(
+        terminal="demo1",
+        plan=DeployPlan(add=("MQL4/Experts/A.ex4",)),
+        backup_path="/d/.mt4ctl/backups/ts.tar",
+        restarted=True,
+        verify_ok=True,
+        verify_detail="service=active; broker connected; 1 experts loaded",
+    )
+    out = _fmt_deploy_result(res)
+    assert "demo1: deployed +1" in out
+    assert "backup: /d/.mt4ctl/backups/ts.tar" in out
+    assert "restarted: yes" in out
+    assert "verify: ok" in out
+
+
+def test_fmt_deploy_result_verify_failed_is_report_only():
+    res = DeployResult(
+        terminal="demo1",
+        plan=DeployPlan(update=("MQL4/Experts/A.ex4",)),
+        backup_path=None,
+        restarted=True,
+        verify_ok=False,
+        verify_detail="service=active; broker connected; EA load not confirmed: Strat",
+    )
+    out = _fmt_deploy_result(res)
+    assert "verify: NOT confirmed" in out
+    assert "did NOT revert" in out  # report-only is explicit
+    assert "re-deploy the previous bundle" in out
+
+
+def test_fmt_deploy_result_inconclusive_connection():
+    res = DeployResult(
+        terminal="demo1",
+        plan=DeployPlan(),
+        backup_path=None,
+        restarted=False,
+        verify_ok=True,
+        verify_detail="service=active; broker inconclusive",
+    )
+    assert "inconclusive" in _fmt_deploy_result(res)
+
+
+async def test_mt4_deploy_is_registered():
+    from mt4ctl.server import mcp
+
+    tools = {t.name for t in await mcp.list_tools()}
+    assert "mt4_deploy" in tools

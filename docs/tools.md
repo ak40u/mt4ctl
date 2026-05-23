@@ -68,6 +68,34 @@ shared display the grab includes the full screen with the target on top.
 Runs the systemd action (as root) and reports the resulting service + connection
 state.
 
+## `mt4_deploy` · mutating
+
+| Arg | Type | Default | Description |
+| --- | --- | --- | --- |
+| `terminal` | string | — | terminal id |
+| `bundle` | string | — | **local** bundle directory (read here, pushed over SSH) |
+| `dry_run` | bool | `false` | preview the plan; no lock, no upload, no change |
+| `confirm` | bool | `false` | required for `env: live` terminals |
+
+Reconciles a terminal's managed strategy files to a local bundle, idempotently.
+Apply-only: it does not select strategies, set lots/magic, generate charts, or
+compile — you hand it finished artifacts. The bundle mirrors the MT4 layout:
+
+```
+<bundle>/
+  profiles/default/<name>.chr        # ready charts (one expert each)
+  MQL4/Experts/<folder>/<ea>.ex4     # the experts those charts reference
+```
+
+Always `dry_run=true` first to preview the add/update/remove/foreign plan.
+Re-running the same bundle is a no-op ("no changes") but still verifies health.
+mt4ctl touches only what **it** deployed (tracked in `.mt4ctl/deployed.json`);
+foreign files like a watchdog's chart are left untouched, and a bundle file that
+would overwrite an unmanaged file is refused. Write order is
+**stop → drain → backup → apply → start**, and verify is **report-only** (a failed
+verify does not revert). There is no rollback command — recovery is to re-deploy
+the previous bundle. See [deploy.md](deploy.md) for the full model.
+
 ## `mt4_login` · mutating
 
 | Arg | Type | Default | Description |

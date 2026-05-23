@@ -68,6 +68,10 @@ other clients are below.
 - **Headless first-login** — automates the one-time bootstrap a migrated terminal
   needs (MetaTrader's saved password is machine-bound), then hands control back
   to `systemd` for automatic reconnection on every restart.
+- **Idempotent strategy deploy** — *kubectl-apply for one terminal*: push a local
+  bundle of charts + experts and reconcile a terminal to it, touching only what
+  mt4ctl deployed (foreign files like a watchdog's chart stay untouched), with a
+  backup-and-restore-on-failure apply and a report-only health verify.
 - **Native *and* WSL2 hosts** — one registry, two execution models; commands are
   base64-shipped so nothing breaks in the `cmd.exe → wsl.exe → bash` gauntlet.
 - **Live-trading guardrails** — terminals tagged `env: live` reject mutating
@@ -95,9 +99,9 @@ other clients are below.
         └─────────────────┘                        └──────────────────┘
 ```
 
-A thin, typed core (`models` → `config` → `ssh` → `scripts` → `operations`/`login`)
-sits under the `server` adapter, so the logic is testable without a network and
-the MCP layer stays a one-line-per-tool shell.
+A thin, typed core (`models` → `config` → `ssh` → `scripts` → `deploy` →
+`operations`/`login`) sits under the `server` adapter, so the logic is testable
+without a network and the MCP layer stays a one-line-per-tool shell.
 
 ## Install
 
@@ -217,6 +221,7 @@ and an absolute `command` path if `uvx` is not on the GUI app's `PATH` (`which u
 | `mt4_ea_list` | – | List the experts (strategies) attached per terminal. |
 | `mt4_autotrading` | – | AutoTrading master switch + per-EA live-trading status. |
 | `mt4_info` | – | Terminal build, broker server, and last broker ping. |
+| `mt4_deploy` | ✓ | Reconcile a terminal to a local strategy bundle (live needs `confirm`). |
 
 Full reference: [`docs/tools.md`](docs/tools.md).
 
@@ -229,8 +234,33 @@ a client:
 mt4ctl init [path]   # write a starter terminals.yaml (default: XDG config path)
 mt4ctl list          # list configured terminals (offline)
 mt4ctl doctor        # check registry, SSH, remote tools, units, data dirs
+mt4ctl deploy <terminal> <bundle> [--dry-run] [--confirm]   # apply a strategy bundle
 mt4ctl serve         # run the MCP stdio server (the default with no subcommand)
 ```
+
+## Deploy
+
+Push a local **bundle** of charts + experts onto a terminal and reconcile it to
+that desired set — idempotently, touching only what mt4ctl deployed. The bundle
+mirrors the MT4 layout:
+
+```
+<bundle>/
+  profiles/default/<name>.chr        # ready charts (one expert each)
+  MQL4/Experts/<folder>/<ea>.ex4     # the experts those charts reference
+```
+
+```bash
+mt4ctl deploy demo3 ./bundle --dry-run   # preview the add/update/remove/foreign plan
+mt4ctl deploy demo3 ./bundle             # apply (env=live terminals need --confirm)
+```
+
+It is **apply-only** (no selection, lot sizing, chart generation, or compilation —
+you build the bundle), idempotent (a re-run is a no-op that still verifies health),
+and managed-subset (foreign files like a watchdog's chart are never touched). The
+write order is **stop → drain → backup → apply → start**, verify is **report-only**,
+and there is no rollback command — recovery is to re-deploy the previous bundle.
+Full model and caveats: [`docs/deploy.md`](docs/deploy.md).
 
 ## Security
 
