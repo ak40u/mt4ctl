@@ -32,10 +32,15 @@ reuse the same core without an MCP client.
 side-effect-free, the gnarly shell logic is unit-tested directly, and the
 orchestration layer never concatenates commands by hand.
 
-**Base64 framing.** Remote scripts are shipped as
-`echo <base64> | base64 -d | bash`. Only the base64 alphabet and pipes ever cross
-the `ssh → cmd.exe → wsl.exe → bash` boundary, eliminating an entire class of
-quoting bugs. The same trick fetches binary files (screenshots) back over stdout.
+**Base64 framing over stdin.** Remote scripts are base64-encoded and streamed over
+the ssh process's **stdin** into a fixed-size remote command (`base64 -d | bash`).
+Only the base64 alphabet ever crosses the `ssh → cmd.exe → wsl.exe → bash`
+boundary, eliminating an entire class of quoting bugs; and because the script
+rides on stdin rather than the command line, the command stays a constant ~40
+bytes no matter how large the generated script is — so a deploy/adopt over a big
+bundle never hits the Windows `cmd.exe` ~8 KB command-line limit. The same stdin
+channel carries the binary tar upload (`put_tar`); binary files (screenshots) come
+back over stdout.
 
 **Per-terminal connection attribution.** Naively, "is it connected?" on a host
 running ten terminals is ambiguous. `mt4ctl` reads each `systemd` unit's cgroup

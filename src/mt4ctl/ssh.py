@@ -1,10 +1,13 @@
 """Async SSH transport for running scripts on native and WSL hosts.
 
 Remote scripts are shipped base64-encoded and decoded on the far side
-(``echo <b64> | base64 -d | bash``). This sidesteps every quoting hazard in the
-``ssh -> Windows cmd.exe -> wsl.exe -> bash`` chain: the only character classes
-that ever cross a shell boundary are the base64 alphabet plus pipes, all of
-which survive ``cmd.exe`` and ``bash`` unharmed.
+(``base64 -d | bash``), with the base64 streamed over the ssh process's **stdin**
+rather than placed on the command line. This sidesteps every quoting hazard in the
+``ssh -> Windows cmd.exe -> wsl.exe -> bash`` chain *and* keeps the remote command
+fixed-size, so a script that grows with the file count (apply/state/backup over a
+large bundle) never crosses the Windows ``cmd.exe`` ~8 KB command-line limit. The
+stdin path is the same one the binary tar upload (:func:`put_tar`) proved
+byte-clean through this chain.
 
 Nothing here interprets command output — callers own parsing.
 """
@@ -57,15 +60,18 @@ def _wrap_for_host(host: Host, inner: str, *, root: bool) -> str:
     return f'bash -c "{inner}"'
 
 
-def build_argv(host: Host, script: str, *, root: bool = False) -> list[str]:
-    """Construct the full ``ssh`` argv that runs *script* on *host*.
+def build_argv(host: Host, *, root: bool = False) -> list[str]:
+    """Construct the ``ssh`` argv whose remote command decodes a base64 script from
+    **stdin** and runs it.
 
+    The command is fixed-size — the script is NOT on the command line; :func:`run`
+    streams it (base64-encoded) over stdin. This keeps the call under the Windows
+    ``cmd.exe`` command-line limit on the WSL chain regardless of script size.
     Exposed (and pure) so it can be unit-tested without a network.
     """
-    payload = base64.b64encode(script.encode("utf-8")).decode("ascii")
     # pipefail makes the pipeline fail closed: if base64 is missing or the
     # decode fails, the command exits non-zero instead of running an empty bash.
-    inner = f"set -o pipefail; echo {payload} | base64 -d | bash"
+    inner = "set -o pipefail; base64 -d | bash"
     remote = _wrap_for_host(host, inner, root=root)
     return ["ssh", *SSH_BASE_OPTS, host.ssh, remote]
 
@@ -87,10 +93,13 @@ async def run(
         timeout: seconds before the SSH call is killed.
         check: raise :class:`RemoteCommandError` on non-zero exit.
     """
-    argv = build_argv(host, script, root=root)
+    argv = build_argv(host, root=root)
+    # The script rides over stdin (base64), not the command line — see module docs.
+    payload = base64.b64encode(script.encode("utf-8"))
     try:
         proc = await asyncio.create_subprocess_exec(
             *argv,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -99,7 +108,7 @@ async def run(
             host.id, 127, f"could not start ssh ({exc}); is the ssh client installed?"
         ) from None
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        out, err = await asyncio.wait_for(proc.communicate(payload), timeout=timeout)
     except TimeoutError:
         proc.kill()
         await proc.wait()
@@ -130,9 +139,9 @@ async def fetch_bytes(host: Host, remote_path: str, *, timeout: float = 30.0) ->
 def build_put_argv(host: Host, dest_dir: str) -> list[str]:
     """Construct the ``ssh`` argv that extracts a stdin-fed tar into *dest_dir*.
 
-    Unlike :func:`build_argv` — which pipes the control script *through* stdin
-    (``echo <b64> | base64 -d | bash``) and so consumes fd 0 — this reserves
-    stdin for the raw tar stream. The extraction script is base64-encoded (with
+    Unlike :func:`run` — which streams its base64 control script over stdin
+    (``base64 -d | bash``) and so consumes fd 0 — this reserves stdin for the raw
+    tar stream. The extraction script is base64-encoded (with
     *dest_dir* already ``shlex.quote``-d inside it, so nothing but the base64
     alphabet crosses the ``ssh → cmd.exe → wsl → bash`` chain) and decoded into a
     **process-substitution file** (``bash <(echo <b64> | base64 -d)``): bash reads

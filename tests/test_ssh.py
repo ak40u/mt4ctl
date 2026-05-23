@@ -19,45 +19,69 @@ def _payload(argv: list[str]) -> str:
     return base64.b64decode(token).decode()
 
 
-def test_native_argv_roundtrips_script():
+def test_native_argv_is_fixed_stdin_decode_command():
     host = Host(id="vps", ssh="my-vps", kind=HostKind.NATIVE)
-    argv = build_argv(host, "echo hi", root=False)
+    argv = build_argv(host, root=False)
     assert argv[0] == "ssh"
     assert argv[-2] == "my-vps"
-    assert argv[-1].startswith("bash -c ")
-    assert _payload(argv) == "echo hi"
+    # the script is NOT on the command line — it rides over stdin
+    assert argv[-1] == 'bash -c "set -o pipefail; base64 -d | bash"'
 
 
 def test_native_root_uses_sudo():
     host = Host(id="vps", ssh="my-vps", kind=HostKind.NATIVE)
-    argv = build_argv(host, "systemctl restart x", root=True)
+    argv = build_argv(host, root=True)
     assert argv[-1].startswith("sudo bash -c ")
 
 
 def test_wsl_argv_wraps_in_wsl():
     host = Host(id="box", ssh="box", kind=HostKind.WSL, wsl_distro="Ubuntu-24.04")
-    argv = build_argv(host, "uname -a")
+    argv = build_argv(host)
     assert "wsl -d Ubuntu-24.04 --" in argv[-1]
     assert "-u root" not in argv[-1]
-    assert _payload(argv) == "uname -a"
+    assert "base64 -d | bash" in argv[-1]
 
 
 def test_wsl_root_adds_user_root():
     host = Host(id="box", ssh="box", kind=HostKind.WSL, wsl_distro="Ubuntu-24.04")
-    argv = build_argv(host, "systemctl stop x", root=True)
+    argv = build_argv(host, root=True)
     assert "wsl -d Ubuntu-24.04 -u root --" in argv[-1]
 
 
-def test_multiline_and_special_chars_survive_encoding():
-    host = Host(id="box", ssh="box", kind=HostKind.WSL, wsl_distro="Ubuntu-24.04")
-    script = 'echo "a|b"\nfor x in 1 2; do echo $x; done'
-    argv = build_argv(host, script)
-    assert _payload(argv) == script
-
-
 def test_build_argv_fails_closed_with_pipefail():
-    argv = build_argv(Host(id="h", ssh="h"), "echo hi")
+    argv = build_argv(Host(id="h", ssh="h"))
     assert "set -o pipefail" in argv[-1]
+
+
+def test_build_argv_command_is_independent_of_script_size():
+    # Regression: the cmd.exe overflow happened because the script was inlined.
+    # build_argv no longer takes a script, so the command can never grow with it.
+    host = Host(id="box", ssh="box", kind=HostKind.WSL, wsl_distro="Ubuntu-24.04")
+    assert len(build_argv(host)[-1]) < 100  # tiny, fixed regardless of payload
+
+
+async def test_run_streams_script_over_stdin_as_base64(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeProc:
+        returncode = 0
+
+        async def communicate(self, data=None):
+            captured["stdin"] = data
+            return (b"out", b"")
+
+    async def fake_exec(*argv, **kw):
+        captured["argv"] = argv
+        captured["stdin_is_pipe"] = kw.get("stdin") is not None
+        return FakeProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+    big = "echo start\n" + "\n".join(f"emit_dest 'f{i}'" for i in range(5000)) + "\necho end"
+    await ssh.run(Host(id="box", ssh="box", kind=HostKind.WSL, wsl_distro="Ubuntu-24.04"), big)
+    # the whole (large) script crosses as base64 on stdin, never on the argv
+    assert captured["stdin_is_pipe"] is True
+    assert base64.b64decode(captured["stdin"]).decode() == big
+    assert all("emit_dest" not in a for a in captured["argv"])  # not on the command line
 
 
 async def test_run_normalizes_local_spawn_failure(monkeypatch):

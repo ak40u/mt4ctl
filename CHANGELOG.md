@@ -13,6 +13,17 @@ to [Semantic Versioning](https://semver.org/).
   untouched (e.g. a watchdog's chart). Transparency only — it reports, never
   touches. New `AdoptResult.foreign` field, surfaced by the tool/CLI output.
 
+### Fixed
+
+- `deploy`/`adopt` failed on real-size bundles over a WSL host with `cmd.exe`'s
+  "The command line is too long". The SSH transport inlined the base64 of the
+  whole generated script into the remote command, whose length grows with the
+  file count (~140 managed files → ~13 KB base64 → past the Windows ~8 KB
+  command-line limit). The script is now streamed over **stdin** (`base64 -d |
+  bash`), making the command fixed-size regardless of bundle size — the same
+  stdin path the binary tar upload already proved byte-clean. Verified on a real
+  WSL host with a 142-file bundle.
+
 ## [0.5.0] - 2026-05-23
 
 ### Added
