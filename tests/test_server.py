@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from mt4ctl import server
 from mt4ctl.errors import Mt4ctlError
 from mt4ctl.models import Env, TerminalStatus
 from mt4ctl.server import _fmt_status, _guard
@@ -87,27 +86,3 @@ async def test_guard_does_not_swallow_unexpected_errors():
 
     with pytest.raises(RuntimeError):
         await boom()
-
-
-def test_main_version(monkeypatch, capsys):
-    from mt4ctl import __version__
-
-    monkeypatch.setattr("sys.argv", ["mt4ctl", "--version"])
-    with pytest.raises(SystemExit) as exc:
-        server.main()
-    assert exc.value.code == 0
-    assert __version__ in capsys.readouterr().out
-
-
-def test_main_tty_explains_instead_of_hanging(monkeypatch, capsys):
-    monkeypatch.setattr("sys.argv", ["mt4ctl"])
-    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-
-    def boom() -> None:
-        raise AssertionError("server must not start on a TTY")
-
-    monkeypatch.setattr(server.mcp, "run", boom)
-    with pytest.raises(SystemExit) as exc:
-        server.main()
-    assert exc.value.code == 2
-    assert "MCP stdio server" in capsys.readouterr().err

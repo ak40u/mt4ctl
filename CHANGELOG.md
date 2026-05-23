@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Setup CLI: `mt4ctl init` (write a starter registry), `mt4ctl list` (offline),
+  and `mt4ctl doctor` (check registry, SSH, remote tools, units, data dirs);
+  `serve` remains the default with no subcommand.
+- `mt4_doctor` MCP tool exposing the same diagnostics to the agent.
+
 ## [0.1.0] - 2026-05-23
 
 Initial release.

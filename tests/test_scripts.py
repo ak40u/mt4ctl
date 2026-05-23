@@ -54,6 +54,13 @@ def test_status_script_handles_broker_failure_and_visibility():
     assert "svcuser=$(systemctl show -p User" in out
 
 
+def test_doctor_script_probes_tools_and_terminals():
+    out = scripts.build_doctor_script([("t1", "mt4-t1", "/home/t/t1")])
+    assert "command -v" in out
+    assert "systemctl cat" in out
+    assert "checkterm 't1' 'mt4-t1' '/home/t/t1'" in out
+
+
 def test_control_script_rejects_bad_action():
     with pytest.raises(ValueError, match="action must be"):
         scripts.build_control_script("svc", "frobnicate")

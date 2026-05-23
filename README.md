@@ -38,28 +38,27 @@ the whole farm conversationally:
 
 ## Quickstart (5 minutes)
 
-`mt4_list` works **offline** (no SSH/MT4 needed), so you can confirm the wiring
-before anything else lines up:
+The `init` → `list` → `doctor` commands let you set up and verify everything
+**before** wiring an MCP client:
 
 ```bash
-# 1. create a minimal registry
-mkdir -p ~/.config/mt4ctl
-cat > ~/.config/mt4ctl/terminals.yaml <<'YAML'
-hosts:
-  box: { ssh: my-ssh-alias, kind: native }
-terminals:
-  t1: { host: box, service: mt4-t1, data_dir: /home/trader/mt4/t1, account: "1000001" }
-YAML
+# 1. write a starter registry, then fill in your hosts + terminals
+uvx mt4ctl init                 # creates ~/.config/mt4ctl/terminals.yaml
+$EDITOR ~/.config/mt4ctl/terminals.yaml
 
-# 2. add to Claude Code (uvx fetches + runs mt4ctl from PyPI — no install)
+# 2. verify — offline, then over SSH (no MCP client needed)
+uvx mt4ctl list                 # confirms the registry parses
+uvx mt4ctl doctor               # checks SSH, remote tools, units, data dirs
+
+# 3. wire into Claude Code
 claude mcp add --scope user mt4ctl \
   --env MT4CTL_CONFIG="$HOME/.config/mt4ctl/terminals.yaml" \
   -- uvx mt4ctl
 ```
 
-Then ask Claude: **"Use mt4_list to show my configured terminals."** You should
-see your `t1` row. Once the SSH alias and `systemd` unit line up, ask for
-**"mt4_status t1"**. Full setup and other clients are below.
+Then ask Claude: **"Use mt4_list to show my configured terminals,"** then
+**"mt4_status,"** and **"mt4_doctor"** if anything looks off. Full setup and
+other clients are below.
 
 ## Features
 
@@ -202,8 +201,21 @@ and an absolute `command` path if `uvx` is not on the GUI app's `PATH` (`which u
 | `mt4_screenshot` | – | Capture a terminal window as PNG. |
 | `mt4_control` | ✓ | `start` / `stop` / `restart` a unit (live needs `confirm`). |
 | `mt4_login` | ✓ | One-time headless login for auto-reconnect (live needs `confirm`). |
+| `mt4_doctor` | – | Diagnose registry, SSH, remote tools, units, and data dirs. |
 
 Full reference: [`docs/tools.md`](docs/tools.md).
+
+## CLI
+
+Besides serving MCP, `mt4ctl` has a few commands for setup and debugging without
+a client:
+
+```bash
+mt4ctl init [path]   # write a starter terminals.yaml (default: XDG config path)
+mt4ctl list          # list configured terminals (offline)
+mt4ctl doctor        # check registry, SSH, remote tools, units, data dirs
+mt4ctl serve         # run the MCP stdio server (the default with no subcommand)
+```
 
 ## Security
 

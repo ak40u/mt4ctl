@@ -78,3 +78,13 @@ state.
 Performs the one-time headless login a migrated terminal needs, then restarts the
 unit so it auto-reconnects from the saved (re-encrypted) credentials. See
 [architecture.md](architecture.md) for the mechanism.
+
+## `mt4_doctor`
+
+No arguments. Read-only.
+
+Diagnoses the setup: registry, secrets-file permissions, and — per host — SSH
+reachability, required remote tools, systemd units, and data directories. Returns
+a ✓/!/✗ checklist. Use it when a terminal is unexpectedly `unknown` or
+`mt4_status` looks wrong. The same checks are available from the shell as
+`mt4ctl doctor`.

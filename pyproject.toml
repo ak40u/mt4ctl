@@ -53,7 +53,7 @@ dev = [
 ]
 
 [project.scripts]
-mt4ctl = "mt4ctl.server:main"
+mt4ctl = "mt4ctl.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mt4ctl"]

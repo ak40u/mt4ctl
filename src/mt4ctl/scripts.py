@@ -141,6 +141,34 @@ exit $rc
 """
 
 
+def build_doctor_script(specs: Iterable[tuple[str, str, str]]) -> str:
+    """Build a host probe for ``doctor``: required tools and per-terminal sanity.
+
+    Emits ``TOOL|<name>|ok|missing`` (core + screenshot tools) and, per terminal,
+    ``TERM|<id>|<found|notfound>|<ok|missing>`` for the systemd unit and data dir.
+    """
+    calls = "\n".join(
+        f"checkterm {sh_quote(tid)} {sh_quote(svc)} {sh_quote(data_dir)}"
+        for tid, svc, data_dir in specs
+    )
+    return f"""\
+set +e
+for t in systemctl ss getent stat base64; do
+  command -v "$t" >/dev/null 2>&1 && echo "TOOL{SEP}$t{SEP}ok" || echo "TOOL{SEP}$t{SEP}missing"
+done
+for t in import scrot xdotool; do
+  command -v "$t" >/dev/null 2>&1 && echo "XTOOL{SEP}$t{SEP}ok" || echo "XTOOL{SEP}$t{SEP}missing"
+done
+checkterm() {{
+  id="$1"; svc="$2"; dir="$3"
+  if systemctl cat "$svc" >/dev/null 2>&1; then unit=found; else unit=notfound; fi
+  if [ -d "$dir" ]; then dd=ok; else dd=missing; fi
+  echo "TERM{SEP}$id{SEP}$unit{SEP}$dd"
+}}
+{calls}
+"""
+
+
 def build_screenshot_script(display: str, window_query: str | None, out_path: str) -> str:
     """Build a script that captures a terminal window to *out_path* as PNG.
 
