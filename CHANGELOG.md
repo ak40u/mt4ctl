@@ -6,12 +6,20 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-23
+
 ### Added
 
 - `mt4_ea_list` — inventory of experts (strategies) attached per terminal.
 - `mt4_autotrading` — terminal master AutoTrading switch (from `terminal.ini`)
   plus per-EA live-trading status (best-effort decode of the chart-expert flags).
 - `mt4_info` — terminal build, broker server, and last broker ping (from logs).
+
+### Fixed
+
+- Fan-out tools (`mt4_ea_list`/`mt4_autotrading`/`mt4_info`) no longer blank the
+  whole `all` result when a single host is unreachable — each terminal renders
+  its own error row (matching `mt4_status`).
 
 ## [0.2.0] - 2026-05-23
 
@@ -63,6 +71,7 @@ Initial release.
   fail-fast config resolution and actionable SSH-failure errors.
 - Test suite, strict `mypy`, `ruff`, and a 3.11–3.13 CI matrix.
 
-[Unreleased]: https://github.com/ak40u/mt4ctl/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/ak40u/mt4ctl/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/ak40u/mt4ctl/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ak40u/mt4ctl/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ak40u/mt4ctl/releases/tag/v0.1.0
