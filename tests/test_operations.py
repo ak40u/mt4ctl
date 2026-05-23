@@ -65,3 +65,16 @@ async def test_control_live_requires_confirm(registry, monkeypatch):
 async def test_control_rejects_bad_action(registry):
     with pytest.raises(ValueError, match="action must be"):
         await operations.control(registry, "demo1", "frobnicate")
+
+
+async def test_logs_surfaces_ssh_failure(registry, monkeypatch):
+    from mt4ctl.ssh import CommandResult
+
+    async def fake_run(host, script, **kw):
+        return CommandResult(255, "", "ssh: connect to host failed")
+
+    monkeypatch.setattr(ssh, "run", fake_run)
+    out = await operations.logs(registry, "demo1")
+    assert "cannot read logs for demo1" in out
+    assert "SSH to host" in out
+    assert "(no output)" not in out

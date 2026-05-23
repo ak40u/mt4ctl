@@ -1,11 +1,12 @@
 """Load and validate the terminal registry from YAML.
 
-The registry path is resolved in this order (first hit wins):
+The registry path is resolved as:
 
-1. the ``path`` argument to :func:`load_registry`
-2. the ``MT4CTL_CONFIG`` environment variable
-3. ``$XDG_CONFIG_HOME/mt4ctl/terminals.yaml`` (or ``~/.config/...``)
-4. ``./terminals.yaml`` in the current working directory
+1. an explicit ``path`` argument — must exist
+2. ``MT4CTL_CONFIG`` — if set, must exist (it does *not* fall back to the search
+   paths, so a typo fails loudly instead of using a stale file)
+3. otherwise the first existing of ``$XDG_CONFIG_HOME/mt4ctl/terminals.yaml``
+   (or ``~/.config/...``) then ``./terminals.yaml``
 
 This keeps real infrastructure details out of the source tree: ship the
 ``examples/terminals.example.yaml`` template, keep the populated file private.
@@ -30,32 +31,47 @@ _DISTRO_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def candidate_paths() -> list[Path]:
-    """Return the registry search path, highest precedence first."""
-    paths: list[Path] = []
-    if env := os.environ.get("MT4CTL_CONFIG"):
-        paths.append(Path(env).expanduser())
+    """Default registry search paths (XDG config dir, then CWD); env excluded."""
     xdg = os.environ.get("XDG_CONFIG_HOME")
     base = Path(xdg).expanduser() if xdg else Path.home() / ".config"
-    paths.append(base / "mt4ctl" / "terminals.yaml")
-    paths.append(Path.cwd() / "terminals.yaml")
-    return paths
+    return [base / "mt4ctl" / "terminals.yaml", Path.cwd() / "terminals.yaml"]
 
 
 def resolve_path(path: str | os.PathLike[str] | None = None) -> Path:
-    """Find the registry file, raising :class:`ConfigError` if none exists."""
+    """Find the registry file, raising :class:`ConfigError` if none exists.
+
+    An explicit ``path`` or a set ``MT4CTL_CONFIG`` must point to an existing
+    file — neither falls back to the search paths, so a typo'd path fails loudly
+    instead of silently using a stale registry.
+    """
     if path is not None:
         resolved = Path(path).expanduser()
         if not resolved.is_file():
             raise ConfigError(f"registry file not found: {resolved}")
         return resolved
+
+    env = os.environ.get("MT4CTL_CONFIG")
+    if env:
+        resolved = Path(env).expanduser()
+        if not resolved.is_file():
+            raise ConfigError(
+                f"MT4CTL_CONFIG is set to {resolved}, but that file does not exist. "
+                "Create it, fix the path, or unset MT4CTL_CONFIG to use the default "
+                "search paths."
+            )
+        return resolved
+
     for candidate in candidate_paths():
         if candidate.is_file():
             return candidate
+
     searched = "\n  ".join(str(p) for p in candidate_paths())
     raise ConfigError(
-        "no registry file found. Set MT4CTL_CONFIG or create one of:\n  "
-        + searched
-        + "\nSee examples/terminals.example.yaml for the format."
+        "mt4ctl could not find a terminal registry.\n\n"
+        "Create one:\n"
+        "  mkdir -p ~/.config/mt4ctl\n"
+        "  cp examples/terminals.example.yaml ~/.config/mt4ctl/terminals.yaml\n\n"
+        "Or set MT4CTL_CONFIG=/absolute/path/to/terminals.yaml.\nSearched:\n  " + searched
     )
 
 

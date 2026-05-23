@@ -36,6 +36,31 @@ the whole farm conversationally:
 > *"Log demo2 into account 1000002 on ExampleBroker-Demo."* ·
 > *"Screenshot the live terminal so I can see the AutoTrading state."*
 
+## Quickstart (5 minutes)
+
+`mt4_list` works **offline** (no SSH/MT4 needed), so you can confirm the wiring
+before anything else lines up:
+
+```bash
+# 1. create a minimal registry
+mkdir -p ~/.config/mt4ctl
+cat > ~/.config/mt4ctl/terminals.yaml <<'YAML'
+hosts:
+  box: { ssh: my-ssh-alias, kind: native }
+terminals:
+  t1: { host: box, service: mt4-t1, data_dir: /home/trader/mt4/t1, account: "1000001" }
+YAML
+
+# 2. add to Claude Code (uvx runs the server straight from git — no install)
+claude mcp add --scope user mt4ctl \
+  --env MT4CTL_CONFIG="$HOME/.config/mt4ctl/terminals.yaml" \
+  -- uvx --from git+https://github.com/ak40u/mt4ctl mt4ctl
+```
+
+Then ask Claude: **"Use mt4_list to show my configured terminals."** You should
+see your `t1` row. Once the SSH alias and `systemd` unit line up, ask for
+**"mt4_status t1"**. Full setup and other clients are below.
+
 ## Features
 
 - **Per-terminal connection detection** — attributes established broker sockets
@@ -83,6 +108,9 @@ runs `mt4ctl` straight from the repo and fetches a matching Python itself:
 ```bash
 uvx --from git+https://github.com/ak40u/mt4ctl mt4ctl   # runs the stdio server
 ```
+
+No `uv` yet? `curl -LsSf https://astral.sh/uv/install.sh | sh` — or skip it and use
+the `pipx` path below.
 
 Prefer a persistent `mt4ctl` command? Install it with `uv` or `pipx`:
 

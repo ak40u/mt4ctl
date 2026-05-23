@@ -11,7 +11,7 @@ Call this first to discover terminal ids.
 
 ## `mt4_status`
 
-| Arg | Type | Default | |
+| Arg | Type | Default | Description |
 | --- | --- | --- | --- |
 | `terminal` | string | `"all"` | a terminal id, or `"all"` |
 
@@ -34,7 +34,7 @@ A terminal is healthy when `SERVICE=active` and `CONN=up`.
 
 ## `mt4_logs`
 
-| Arg | Type | Default | |
+| Arg | Type | Default | Description |
 | --- | --- | --- | --- |
 | `terminal` | string | — | terminal id |
 | `pattern` | string | `""` | optional case-insensitive regex |
@@ -45,7 +45,7 @@ useful for `login`, `disconnect`, `error`.
 
 ## `mt4_screenshot`
 
-| Arg | Type | | |
+| Arg | Type | Default | Description |
 | --- | --- | --- | --- |
 | `terminal` | string | — | terminal id |
 
@@ -56,7 +56,7 @@ shared display the grab includes the full screen with the target on top.
 
 ## `mt4_control` · mutating
 
-| Arg | Type | Default | |
+| Arg | Type | Default | Description |
 | --- | --- | --- | --- |
 | `terminal` | string | — | terminal id |
 | `action` | string | — | `start` \| `stop` \| `restart` |
@@ -67,7 +67,7 @@ state.
 
 ## `mt4_login` · mutating
 
-| Arg | Type | Default | |
+| Arg | Type | Default | Description |
 | --- | --- | --- | --- |
 | `terminal` | string | — | terminal id |
 | `server` | string | — | broker server name, e.g. `ExampleBroker-Demo` |

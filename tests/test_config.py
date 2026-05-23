@@ -155,7 +155,16 @@ def test_load_registry_missing_file_raises(tmp_path, monkeypatch):
     monkeypatch.delenv("MT4CTL_CONFIG", raising=False)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))  # nothing there
     monkeypatch.chdir(tmp_path)
-    with pytest.raises(ConfigError, match="no registry file found"):
+    with pytest.raises(ConfigError, match="could not find a terminal registry"):
+        load_registry()
+
+
+def test_env_config_missing_file_fails_fast(tmp_path, monkeypatch):
+    # A set-but-missing MT4CTL_CONFIG must error, not fall back to a stale file.
+    (tmp_path / "terminals.yaml").write_text(VALID_YAML)  # would be the fallback
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MT4CTL_CONFIG", str(tmp_path / "nope.yaml"))
+    with pytest.raises(ConfigError, match="MT4CTL_CONFIG is set to"):
         load_registry()
 
 

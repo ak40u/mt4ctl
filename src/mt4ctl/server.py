@@ -7,15 +7,17 @@ spawn locally.
 
 from __future__ import annotations
 
+import argparse
 import functools
+import sys
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp import Image as McpImage
 
+from . import __version__, operations
 from . import login as login_mod
-from . import operations
 from .config import load_registry
 from .errors import Mt4ctlError
 from .models import Registry, TerminalStatus
@@ -66,10 +68,12 @@ def _fmt_status(rows: list[TerminalStatus]) -> str:
     for s in rows:
         conn = {True: "up", False: "down", None: "?"}[s.connected]
         age = "-" if s.log_age_seconds is None else f"{s.log_age_seconds}s"
-        flag = "" if s.healthy or s.service_state == "unknown" else "  <-- check"
+        # Surface the cause (e.g. "host unreachable") for anything not healthy,
+        # rather than hiding it behind a generic flag.
+        detail = "" if s.healthy else "  <- " + (s.last_event or "check")
         lines.append(
             f"{s.id:<12} {s.env.value:<5} {(s.account or '-'):<12} "
-            f"{s.service_state:<9} {conn:<6} {age:<8}{flag}"
+            f"{s.service_state:<9} {conn:<6} {age:<8}{detail}"
         )
     return "\n".join(lines)
 
@@ -186,7 +190,40 @@ async def mt4_screenshot(terminal: str) -> McpImage:
 
 
 def main() -> None:
-    """Console-script entry point: run the MCP server over stdio."""
+    """Console-script entry point.
+
+    Parses ``--help``/``--version`` for humans, then runs the MCP stdio server.
+    If launched interactively (a TTY, not piped by an MCP client) it explains
+    itself instead of hanging silently on stdin.
+    """
+    parser = argparse.ArgumentParser(
+        prog="mt4ctl",
+        description=(
+            "MCP stdio server for managing headless MetaTrader 4 terminals over "
+            "SSH. It is meant to be launched by an MCP client (Claude Code / "
+            "Claude Desktop) and speaks the Model Context Protocol over "
+            "stdin/stdout — it has no interactive CLI."
+        ),
+        epilog=(
+            "Configure via MT4CTL_CONFIG or ~/.config/mt4ctl/terminals.yaml. "
+            "Setup: https://github.com/ak40u/mt4ctl#connect-to-an-mcp-client"
+        ),
+    )
+    parser.add_argument("--version", action="version", version=f"mt4ctl {__version__}")
+    parser.parse_args()
+
+    if sys.stdin.isatty():
+        print(
+            "mt4ctl is an MCP stdio server — launch it from an MCP client, not "
+            "directly.\n"
+            "  • Claude Code:   claude mcp add --scope user mt4ctl -- "
+            "uvx --from git+https://github.com/ak40u/mt4ctl mt4ctl\n"
+            "  • Details:       https://github.com/ak40u/mt4ctl#connect-to-an-mcp-client\n"
+            "Run `mt4ctl --help` for options.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
     mcp.run()
 
 

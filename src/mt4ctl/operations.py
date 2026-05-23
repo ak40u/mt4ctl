@@ -112,7 +112,14 @@ async def logs(
     host = registry.host_of(term)
     script = scripts.build_logs_script(term.data_dir, pattern, max(1, min(lines, 1000)))
     result = await ssh.run(host, script, timeout=30.0, check=False)
-    return result.stdout.strip() or "(no output)"
+    if result.returncode != 0:
+        detail = result.stderr.strip() or "host unreachable"
+        return (
+            f"error: cannot read logs for {terminal_id}: SSH to host {host.id} "
+            f"failed (exit {result.returncode}): {detail}. Check the SSH alias, key, "
+            f"and BatchMode access, then retry."
+        )
+    return result.stdout.strip() or "(no log output)"
 
 
 async def control(
