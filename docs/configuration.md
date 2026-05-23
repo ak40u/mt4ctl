@@ -72,7 +72,10 @@ Keep this file out of version control (the default `.gitignore` already excludes
 
 Each managed host needs: `bash`, `systemctl`, `ss`, `getent`, `base64`, `stat`,
 and — for `mt4_screenshot` — an X server on the configured display plus
-`imagemagick` (`import`) or `scrot`, and `xdotool`.
+`imagemagick` (`import`) or `scrot`, and `xdotool`. For `mt4_deploy` / `mt4_adopt`
+a host also needs GNU `tar` and a sha256 tool (`sha256sum`, or `shasum`/`openssl`);
+these are checked at deploy time, not by `mt4_doctor`, so lifecycle-only hosts
+stay green without them.
 
 Per-terminal connection detection reads **cgroup v2**
 (`/sys/fs/cgroup/<unit>/cgroup.procs`), the default on modern systemd. On cgroup

@@ -133,7 +133,8 @@ pip install -e ".[dev]"
 
 The server machine needs either `uv` or Python 3.11+, plus SSH access to your
 hosts. The remote hosts need the usual tools `mt4ctl` shells out to: `systemctl`,
-`ss`, `getent`, and (for screenshots) `imagemagick`/`scrot` + `xdotool`.
+`ss`, `getent`, (for screenshots) `imagemagick`/`scrot` + `xdotool`, and (for
+deploy/adopt) GNU `tar` + a sha256 tool.
 
 ## Configure
 

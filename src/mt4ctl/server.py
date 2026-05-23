@@ -25,9 +25,13 @@ mcp = FastMCP(
     "mt4ctl",
     instructions=(
         "Manage headless MetaTrader terminals running under Wine + systemd on "
-        "remote hosts. Use mt4_list to discover terminals, mt4_status to check "
-        "health, mt4_logs to inspect activity. mt4_control and mt4_login mutate "
-        "state; for terminals tagged env=live they require confirm=true."
+        "remote hosts. Read-only: mt4_list (discover terminals), mt4_status "
+        "(health), mt4_logs, mt4_ea_list / mt4_autotrading / mt4_info (strategy "
+        "inventory), mt4_doctor (diagnostics). Mutating (env=live requires "
+        "confirm=true): mt4_control (start/stop/restart), mt4_login (one-time "
+        "headless login), mt4_deploy (reconcile a terminal to a local strategy "
+        "bundle), mt4_adopt (record an already-running bundle as managed — the "
+        "first cutover, before the first mt4_deploy on an existing farm)."
     ),
 )
 
