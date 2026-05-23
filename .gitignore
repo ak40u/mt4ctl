@@ -1,0 +1,35 @@
+# --- private infrastructure: never commit real hosts/accounts/secrets ---
+/terminals.yaml
+terminals.local.yaml
+credentials.json
+*.secret
+.env
+.env.*
+
+# --- python ---
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# --- tooling caches ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# --- local scratch ---
+.cache/
+*.png
+plans/
+
+# --- editors / OS ---
+.idea/
+.vscode/
+.DS_Store

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "mt4ctl": {
+      "command": "mt4ctl",
+      "env": {
+        "MT4CTL_CONFIG": "/home/you/.config/mt4ctl/terminals.yaml"
+      }
+    }
+  }
+}

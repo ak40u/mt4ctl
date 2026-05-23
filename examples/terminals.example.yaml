@@ -1,0 +1,52 @@
+# mt4ctl registry — copy to one of:
+#   $MT4CTL_CONFIG
+#   ~/.config/mt4ctl/terminals.yaml
+#   ./terminals.yaml
+# and fill in your real hosts and terminals. Keep the populated file private;
+# it is gitignored by default.
+
+# ---------------------------------------------------------------------------
+# Hosts: machines reachable over SSH that run your terminals.
+# ---------------------------------------------------------------------------
+hosts:
+  # A Windows box running the demo farm inside WSL2.
+  demo-box:
+    ssh: demo-box                  # ~/.ssh/config alias, or user@host
+    kind: wsl                      # commands are wrapped in `wsl -d <distro> --`
+    wsl_distro: Ubuntu-24.04
+    broker_host: demo.broker.example.com   # optional; sharpens connection checks
+
+  # A plain Linux VPS running live terminals directly under systemd.
+  live-vps:
+    ssh: live-vps
+    kind: native                   # root via sudo
+    broker_host: live.broker.example.com
+
+# ---------------------------------------------------------------------------
+# Terminals: MetaTrader instances, each a systemd unit on its host.
+# ---------------------------------------------------------------------------
+terminals:
+  demo1:
+    host: demo-box
+    service: mt4-demo1             # systemctl unit name
+    data_dir: /home/trader/mt4/demo1   # parent of logs/ and config/
+    display: ":99"                 # X display used for screenshots
+    account: "1000001"            # login number (also locates the window)
+    env: demo
+
+  demo2:
+    host: demo-box
+    service: mt4-demo2
+    data_dir: /home/trader/mt4/demo2
+    display: ":99"
+    account: "1000002"
+    env: demo
+
+  live-main:
+    host: live-vps
+    service: mt4-live-main
+    data_dir: "/home/trader/mt4/Live Terminal 2000001"   # paths may contain spaces
+    display: ":2"
+    account: "2000001"
+    env: live                      # mutating ops require confirm=true
+    # window_match: "Live Terminal" # optional: override window search string

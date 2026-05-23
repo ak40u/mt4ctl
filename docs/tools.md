@@ -1,0 +1,80 @@
+# Tools reference
+
+All tools are exposed over the MCP stdio transport. Read-only tools are always
+available; mutating tools (`mt4_control`, `mt4_login`) require `confirm=true` when
+the target terminal is tagged `env: live`.
+
+## `mt4_list`
+
+List configured terminals with host, account, and environment. Offline — no SSH.
+Call this first to discover terminal ids.
+
+## `mt4_status`
+
+| Arg | Type | Default | |
+| --- | --- | --- | --- |
+| `terminal` | string | `"all"` | a terminal id, or `"all"` |
+
+Polls hosts concurrently and returns a table:
+
+```
+TERMINAL     ENV   ACCOUNT      SERVICE   CONN   LOG AGE
+------------------------------------------------------------
+demo1        demo  1000001      active    up     8s
+demo2        demo  1000002      active    up     3s
+live-main    live  2000001      active    down   41s     <-- check
+```
+
+- **SERVICE** — raw `systemctl is-active` value.
+- **CONN** — `up` / `down` / `?`, attributed per terminal via its cgroup's
+  established `:443` sockets.
+- **LOG AGE** — seconds since the newest log file was written.
+
+A terminal is healthy when `SERVICE=active` and `CONN=up`.
+
+## `mt4_logs`
+
+| Arg | Type | Default | |
+| --- | --- | --- | --- |
+| `terminal` | string | — | terminal id |
+| `pattern` | string | `""` | optional case-insensitive regex |
+| `lines` | int | `50` | trailing lines (1–1000) |
+
+Returns the tail of the terminal's newest log file. With `pattern`, greps first —
+useful for `login`, `disconnect`, `error`.
+
+## `mt4_screenshot`
+
+| Arg | Type | | |
+| --- | --- | --- | --- |
+| `terminal` | string | — | terminal id |
+
+Captures the terminal's display as a PNG (returned as an MCP image), with the
+target window raised and focused first so it isn't obscured. On hosts where each
+terminal owns its own X display this is effectively just that terminal; on a
+shared display the grab includes the full screen with the target on top.
+
+## `mt4_control` · mutating
+
+| Arg | Type | Default | |
+| --- | --- | --- | --- |
+| `terminal` | string | — | terminal id |
+| `action` | string | — | `start` \| `stop` \| `restart` |
+| `confirm` | bool | `false` | required for `env: live` terminals |
+
+Runs the systemd action (as root) and reports the resulting service + connection
+state.
+
+## `mt4_login` · mutating
+
+| Arg | Type | Default | |
+| --- | --- | --- | --- |
+| `terminal` | string | — | terminal id |
+| `server` | string | — | broker server name, e.g. `ExampleBroker-Demo` |
+| `account` | string | `""` | login number; defaults to the configured account |
+| `password` | string | `""` | explicit password; else resolved from env/secrets |
+| `confirm` | bool | `false` | required for `env: live` terminals |
+
+Performs the one-time headless login a migrated terminal needs, then restarts the
+unit so it auto-reconnects from the saved (re-encrypted) credentials. See
+[architecture.md](architecture.md) for the mechanism.
