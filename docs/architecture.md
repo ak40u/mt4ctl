@@ -4,18 +4,25 @@
 single responsibility and depends only on those below it.
 
 ```
+cli.py           console entry point — serve (default) / list / doctor / init
+   │
 server.py        MCP tool definitions (FastMCP) — one thin wrapper per tool
    │
-   ├── operations.py   status · logs · screenshot · control  (orchestration)
+   ├── operations.py   status · logs · screenshot · control · experts · info
    ├── login.py        headless first-login bootstrap
+   ├── diagnostics.py  doctor checks (registry, SSH, tools, units, connections)
    │
    ├── scripts.py      pure bash builders (no I/O) ── the only place shell lives
    ├── ssh.py          async SSH transport (base64-framed), native + WSL
    ├── auth.py         credential resolution chain
    ├── config.py       YAML → Registry, with validation
-   ├── models.py       Host · Terminal · Registry · TerminalStatus (dataclasses)
+   ├── models.py       Host · Terminal · Registry · TerminalStatus · Expert … (dataclasses)
    └── errors.py       typed, actionable exceptions
 ```
+
+`cli.py` is the installed `mt4ctl` command: with no subcommand it runs the MCP
+stdio server (`server.serve()`); `list`/`doctor`/`init` are setup helpers that
+reuse the same core without an MCP client.
 
 ## Design choices
 
