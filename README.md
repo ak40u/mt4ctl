@@ -51,10 +51,10 @@ terminals:
   t1: { host: box, service: mt4-t1, data_dir: /home/trader/mt4/t1, account: "1000001" }
 YAML
 
-# 2. add to Claude Code (uvx runs the server straight from git — no install)
+# 2. add to Claude Code (uvx fetches + runs mt4ctl from PyPI — no install)
 claude mcp add --scope user mt4ctl \
   --env MT4CTL_CONFIG="$HOME/.config/mt4ctl/terminals.yaml" \
-  -- uvx --from git+https://github.com/ak40u/mt4ctl mt4ctl
+  -- uvx mt4ctl
 ```
 
 Then ask Claude: **"Use mt4_list to show my configured terminals."** You should
@@ -106,7 +106,7 @@ The fastest path needs no clone and no global install — [`uv`](https://docs.as
 runs `mt4ctl` straight from the repo and fetches a matching Python itself:
 
 ```bash
-uvx --from git+https://github.com/ak40u/mt4ctl mt4ctl   # runs the stdio server
+uvx mt4ctl   # runs the stdio server
 ```
 
 No `uv` yet? `curl -LsSf https://astral.sh/uv/install.sh | sh` — or skip it and use
@@ -115,9 +115,9 @@ the `pipx` path below.
 Prefer a persistent `mt4ctl` command? Install it with `uv` or `pipx`:
 
 ```bash
-uv tool install git+https://github.com/ak40u/mt4ctl
+uv tool install mt4ctl
 # or
-pipx install git+https://github.com/ak40u/mt4ctl
+pipx install mt4ctl
 ```
 
 For development:
@@ -156,7 +156,7 @@ schema and [`docs/configuration.md`](docs/configuration.md) for details.
 ```bash
 claude mcp add --scope user mt4ctl \
   --env MT4CTL_CONFIG="$HOME/.config/mt4ctl/terminals.yaml" \
-  -- uvx --from git+https://github.com/ak40u/mt4ctl mt4ctl
+  -- uvx mt4ctl
 ```
 
 Or commit a project `.mcp.json` to share with a team (Claude Code expands `${HOME}`):
@@ -166,7 +166,7 @@ Or commit a project `.mcp.json` to share with a team (Claude Code expands `${HOM
   "mcpServers": {
     "mt4ctl": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/ak40u/mt4ctl", "mt4ctl"],
+      "args": ["mt4ctl"],
       "env": { "MT4CTL_CONFIG": "${HOME}/.config/mt4ctl/terminals.yaml" }
     }
   }
@@ -182,7 +182,7 @@ and an absolute `command` path if `uvx` is not on the GUI app's `PATH` (`which u
   "mcpServers": {
     "mt4ctl": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/ak40u/mt4ctl", "mt4ctl"],
+      "args": ["mt4ctl"],
       "env": { "MT4CTL_CONFIG": "/Users/you/.config/mt4ctl/terminals.yaml" }
     }
   }

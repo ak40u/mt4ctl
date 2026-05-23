@@ -2,7 +2,7 @@
   "mcpServers": {
     "mt4ctl": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/ak40u/mt4ctl", "mt4ctl"],
+      "args": ["mt4ctl"],
       "env": {
         "MT4CTL_CONFIG": "${HOME}/.config/mt4ctl/terminals.yaml"
       }

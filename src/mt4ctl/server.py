@@ -217,7 +217,7 @@ def main() -> None:
             "mt4ctl is an MCP stdio server — launch it from an MCP client, not "
             "directly.\n"
             "  • Claude Code:   claude mcp add --scope user mt4ctl -- "
-            "uvx --from git+https://github.com/ak40u/mt4ctl mt4ctl\n"
+            "uvx mt4ctl\n"
             "  • Details:       https://github.com/ak40u/mt4ctl#connect-to-an-mcp-client\n"
             "Run `mt4ctl --help` for options.",
             file=sys.stderr,
