@@ -78,6 +78,51 @@ def test_unknown_terminal_lookup_lists_known(registry):
         registry.terminal("ghost")
 
 
+def test_non_mapping_host_entry_rejected():
+    data = {
+        "hosts": {"h": "not-a-map"},
+        "terminals": {"t": {"host": "h", "service": "s", "data_dir": "/d"}},
+    }
+    with pytest.raises(ConfigError, match="expected a mapping"):
+        parse_registry(data)
+
+
+def test_invalid_host_id_rejected():
+    data = {
+        "hosts": {"bad id!": {"ssh": "h"}},
+        "terminals": {"t": {"host": "bad id!", "service": "s", "data_dir": "/d"}},
+    }
+    with pytest.raises(ConfigError, match="host id"):
+        parse_registry(data)
+
+
+def test_ssh_starting_with_dash_rejected():
+    data = {
+        "hosts": {"h": {"ssh": "-oProxyCommand=evil"}},
+        "terminals": {"t": {"host": "h", "service": "s", "data_dir": "/d"}},
+    }
+    with pytest.raises(ConfigError, match="must not start with"):
+        parse_registry(data)
+
+
+def test_invalid_wsl_distro_rejected():
+    data = {
+        "hosts": {"h": {"ssh": "h", "kind": "wsl", "wsl_distro": "Ubuntu; rm -rf"}},
+        "terminals": {"t": {"host": "h", "service": "s", "data_dir": "/d"}},
+    }
+    with pytest.raises(ConfigError, match="wsl_distro"):
+        parse_registry(data)
+
+
+def test_pipe_in_data_dir_rejected():
+    data = {
+        "hosts": {"h": {"ssh": "h"}},
+        "terminals": {"t": {"host": "h", "service": "s", "data_dir": "/d|x"}},
+    }
+    with pytest.raises(ConfigError, match="must not contain"):
+        parse_registry(data)
+
+
 def test_load_registry_from_explicit_path(tmp_path):
     f = tmp_path / "terminals.yaml"
     f.write_text(VALID_YAML)

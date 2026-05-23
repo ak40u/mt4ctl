@@ -39,6 +39,10 @@ def resolve_password(account: str, explicit: str | None = None) -> str:
 
     path = secrets_file()
     if path.is_file():
+        if os.name == "posix" and (path.stat().st_mode & 0o077):
+            raise CredentialError(
+                f"secrets file {path} is readable by group/other; run: chmod 600 {path}"
+            )
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as exc:

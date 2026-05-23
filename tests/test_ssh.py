@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import base64
 
+from mt4ctl import ssh
 from mt4ctl.models import Host, HostKind
-from mt4ctl.ssh import build_argv
+from mt4ctl.ssh import CommandResult, build_argv
 
 
 def _payload(argv: list[str]) -> str:
@@ -49,3 +50,16 @@ def test_multiline_and_special_chars_survive_encoding():
     script = 'echo "a|b"\nfor x in 1 2; do echo $x; done'
     argv = build_argv(host, script)
     assert _payload(argv) == script
+
+
+async def test_fetch_bytes_quotes_remote_path(monkeypatch):
+    captured: dict[str, str] = {}
+
+    async def fake_run(host, script, **kw):
+        captured["script"] = script
+        return CommandResult(0, "", "")
+
+    monkeypatch.setattr(ssh, "run", fake_run)
+    await ssh.fetch_bytes(Host(id="h", ssh="h"), "/tmp/x$(touch pwned).png")
+    # the dangerous path must be single-quoted, not left to expand
+    assert "'/tmp/x$(touch pwned).png'" in captured["script"]

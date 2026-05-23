@@ -4,11 +4,17 @@ Every function here is pure: it returns a bash string and touches nothing. That
 keeps the shell logic unit-testable and the orchestration layer free of quoting
 concerns. Output uses a ``|``-delimited line protocol parsed back in
 :mod:`mt4ctl.operations`.
+
+Invariant: any registry- or caller-supplied value embedded in a script is either
+``sh_quote``-d or written inside a single-quoted heredoc. Nothing is
+interpolated raw into a double-quoted shell context.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
+
+CONTROL_ACTIONS = ("start", "stop", "restart")
 
 # Field separator for the status line protocol. Chosen so it never collides with
 # log text (we strip it from captured log lines before emitting).
@@ -29,8 +35,11 @@ def build_status_script(broker_host: str | None, specs: Iterable[tuple[str, str,
         ``TERM|<id>|<service_state>|<log_age_s|-1>|<estab443|-1>|<last_event>``
 
     Connection is attributed per terminal by intersecting the service cgroup's
-    PIDs with established ``:443`` sockets (optionally filtered to the broker's
-    resolved IPs), so terminals sharing a host are counted independently.
+    ``terminal.exe`` PIDs with established ``:443`` sockets (optionally filtered
+    to the broker's resolved IPs). ``estab=-1`` means *unknown* and is emitted
+    rather than a guess when attribution is not reliable: broker resolution
+    failed, ``ss`` exposed no process metadata (e.g. non-root, foreign user), or
+    the terminal owns no ``terminal.exe`` process.
     """
     broker = sh_quote(broker_host) if broker_host else "''"
     calls = "\n".join(
@@ -41,12 +50,15 @@ def build_status_script(broker_host: str | None, specs: Iterable[tuple[str, str,
 set +e
 NOW=$(date +%s)
 BROKER={broker}
+BIPS=""
+BROKER_FAIL=0
 if [ -n "$BROKER" ]; then
-  BIPS=$(getent ahostsv4 "$BROKER" 2>/dev/null | awk '{{print $1}}' | sort -u | tr '\\n' ' ')
-else
-  BIPS=""
+  BIPS=$(getent ahosts "$BROKER" 2>/dev/null | awk '{{print $1}}' | sort -u | tr '\\n' ' ')
+  [ -z "$BIPS" ] && BROKER_FAIL=1
 fi
-ESTABS=$(ss -tnp 2>/dev/null | awk '/ESTAB/ && $5 ~ /:443$/ {{print}}')
+SS=$(ss -tnp 2>/dev/null)
+ESTABS=$(printf '%s\\n' "$SS" | awk '/ESTAB/ && $5 ~ /:443$/ {{print}}')
+PIDVIS=$(printf '%s\\n' "$SS" | grep -c 'pid=')
 
 emit() {{
   id="$1"; svc="$2"; dir="$3"
@@ -61,9 +73,6 @@ emit() {{
     age=-1; last=""
   fi
   cg=$(systemctl show -p ControlGroup --value "$svc" 2>/dev/null)
-  # Only the terminal.exe process truly owns a broker socket. A Wine prefix
-  # shared across terminals has one wineserver holding duplicated fds, so
-  # counting raw cgroup pids would mis-attribute a sibling's connection.
   pids=""
   for p in $(cat "/sys/fs/cgroup${{cg}}/cgroup.procs" 2>/dev/null); do
     case "$(cat /proc/$p/comm 2>/dev/null)" in
@@ -71,11 +80,12 @@ emit() {{
     esac
   done
   estab=-1
-  if [ -n "$pids" ]; then
+  if [ "$BROKER_FAIL" = 0 ] && [ "${{PIDVIS:-0}}" -gt 0 ] && [ -n "$pids" ]; then
     estab=0
     while IFS= read -r ln; do
       [ -z "$ln" ] && continue
-      peer=$(echo "$ln" | awk '{{print $5}}'); ip=${{peer%:*}}
+      peer=$(echo "$ln" | awk '{{print $5}}')
+      ip=${{peer%:*}}; ip=${{ip#[}}; ip=${{ip%]}}
       if [ -n "$BIPS" ]; then case " $BIPS " in *" $ip "*) : ;; *) continue ;; esac; fi
       for p in $pids; do case "$ln" in *"pid=$p,"*) estab=$((estab+1)); break ;; esac; done
     done <<< "$ESTABS"
@@ -96,22 +106,30 @@ def build_logs_script(data_dir: str, pattern: str | None, lines: int) -> str:
     )
     return f"""\
 set +e
-log=$(ls -t {sh_quote(data_dir)}/logs/*.log 2>/dev/null | head -1)
-if [ -z "$log" ]; then echo "(no log files in {data_dir}/logs)"; exit 0; fi
+DIR={sh_quote(data_dir)}
+log=$(ls -t "$DIR"/logs/*.log 2>/dev/null | head -1)
+if [ -z "$log" ]; then printf '(no log files in %s/logs)\\n' "$DIR"; exit 0; fi
 echo "# $log"
 {grep}
 """
 
 
 def build_control_script(service: str, action: str) -> str:
-    """Build a script that runs a systemd action and reports the resulting state."""
+    """Build a script that runs a systemd action and reports the resulting state.
+
+    The script exits with systemctl's return code so the caller can treat a
+    failed start/stop/restart as an error rather than silent success.
+    """
+    if action not in CONTROL_ACTIONS:
+        raise ValueError(f"action must be one of {CONTROL_ACTIONS}, got {action!r}")
     svc = sh_quote(service)
     return f"""\
 set +e
 systemctl {action} {svc}
 rc=$?
 sleep 1
-echo "STATE|$(systemctl is-active {svc} 2>/dev/null || echo unknown)|rc=$rc"
+echo "STATE{SEP}$(systemctl is-active {svc} 2>/dev/null || echo unknown){SEP}rc=$rc"
+exit $rc
 """
 
 

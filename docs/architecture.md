@@ -50,18 +50,23 @@ MetaTrader encrypts the saved account password with a machine-bound key, so a
 terminal copied to a new host shows an authorization dialog and never connects.
 `login.py` automates the recovery:
 
-1. stop the unit (free the terminal slot)
-2. write a transient `[Common]` startup config (`login`/`password`/`server`, mode 600)
-3. launch the terminal **in its own process group** (`setsid`), reusing the unit's
-   `WorkingDirectory` / `WINEPREFIX` / `DISPLAY`
-4. wait for `config/accounts.ini` to be rewritten — MetaTrader's signal that
-   authentication succeeded and credentials were re-encrypted for this host
-5. kill *only* that process group (siblings share the Wine prefix — a blanket
-   `wineserver -k` would take them down), `shred` the config
+1. stop the unit (free the terminal slot); abort if the stop fails
+2. create a transient `[Common]` startup config with `mktemp` (fresh, mode 600)
+   and write `login`/`password`/`server` into a **single-quoted heredoc** so the
+   shell never expands the values
+3. stamp a marker file, then launch the terminal **in its own process group**
+   (`setsid`), reusing the unit's `WorkingDirectory` / `WINEPREFIX` / `DISPLAY`
+4. wait until `config/accounts.ini` is *newer than the marker* — MetaTrader's
+   signal that authentication succeeded and credentials were re-encrypted here
+5. a `trap cleanup EXIT HUP INT TERM` **always** kills *only* that process group
+   (siblings share the Wine prefix — a blanket `wineserver -k` would take them
+   down) and `shred`s the config, even if an earlier step fails
 6. restart the unit, which now auto-logins from the saved file
 
-Step 5 is the subtle one: because demo farms commonly share a single Wine prefix,
-the kill must be scoped to the bootstrap's process group.
+Two subtleties: the kill is scoped to the bootstrap's process group because demo
+farms commonly share a single Wine prefix; and the cleanup is a trap, not a
+trailing statement, so the credential file is removed on any exit path. The
+one-shot runs as the SSH user, so that user must be the unit's `User=`.
 
 ## Testing strategy
 

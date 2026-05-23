@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import shlex
 from dataclasses import dataclass
 
 from .errors import RemoteCommandError
@@ -114,6 +115,6 @@ async def fetch_bytes(host: Host, remote_path: str, *, timeout: float = 30.0) ->
 
     Implemented via base64 over stdout so it works through the same WSL chain.
     """
-    script = f'base64 "{remote_path}"'
+    script = f"base64 {shlex.quote(remote_path)}"
     result = await run(host, script, timeout=timeout)
     return base64.b64decode(result.stdout)

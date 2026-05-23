@@ -145,7 +145,9 @@ Full reference: [`docs/tools.md`](docs/tools.md).
   `mt4ctl` stores no credentials of its own.
 - During `mt4_login` the password is embedded in the base64-framed script handed
   to `ssh`, so it is briefly visible in the local process list to your own user.
-  It is never written to disk except the mode-600 remote config, which is shredded.
+  On the remote side it is written only to a fresh `mktemp` config (mode 600) that
+  a cleanup trap `shred`s on any exit path. The secrets file is rejected if it is
+  readable by group/other.
 
 ## Development
 

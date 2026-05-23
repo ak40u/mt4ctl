@@ -8,7 +8,8 @@ These functions take a :class:`~mt4ctl.models.Registry`, talk to hosts through
 from __future__ import annotations
 
 import asyncio
-import time
+import re
+import uuid
 from pathlib import Path
 
 from . import scripts, ssh
@@ -132,7 +133,9 @@ async def control(
         raise ConfirmationRequiredError(terminal_id, action)
     host = registry.host_of(term)
     script = scripts.build_control_script(term.service, action)
-    await ssh.run(host, script, root=True, timeout=45.0, check=False)
+    # The script exits with systemctl's code; check=True surfaces a failed
+    # start/stop/restart instead of reporting phantom success.
+    await ssh.run(host, script, root=True, timeout=45.0, check=True)
     return (await status(registry, [terminal_id]))[0]
 
 
@@ -142,7 +145,7 @@ async def screenshot(
     """Capture a terminal window and save the PNG locally, returning its path."""
     term = registry.terminal(terminal_id)
     host = registry.host_of(term)
-    remote_tmp = f"/tmp/mt4ctl-{term.id}-{int(time.time())}.png"
+    remote_tmp = f"/tmp/mt4ctl-{uuid.uuid4().hex}.png"
     script = scripts.build_screenshot_script(term.display, term.window_query, remote_tmp)
     result = await ssh.run(host, script, timeout=45.0, check=False)
     if "OK " not in result.stdout:
@@ -152,6 +155,7 @@ async def screenshot(
 
     out_dir = out_dir or Path.home() / ".cache" / "mt4ctl"
     out_dir.mkdir(parents=True, exist_ok=True)
-    local = out_dir / f"{term.id}.png"
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]", "_", term.id)
+    local = out_dir / f"{safe_id}.png"
     local.write_bytes(data)
     return local

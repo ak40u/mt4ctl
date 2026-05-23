@@ -76,3 +76,14 @@ Per-terminal connection detection reads **cgroup v2**
 (`/sys/fs/cgroup/<unit>/cgroup.procs`), the default on modern systemd. On cgroup
 v1 hosts the connection column degrades to `?`; service state and logs are
 unaffected.
+
+For connection attribution to be accurate, the SSH user must be able to see the
+terminal processes' sockets — i.e. the **SSH user is the unit's `User=`**, or you
+connect as root. When `ss` cannot expose process metadata, or when a configured
+`broker_host` fails to resolve, the connection column reports `?` rather than
+guessing.
+
+`mt4_login` also runs its one-shot under the **SSH account**, reusing the unit's
+`WorkingDirectory`, `WINEPREFIX`, and `DISPLAY`. Use it on units whose `User=`
+matches your SSH user (the common single-user farm setup); for units that run as
+a different user, log in via that user's session instead.

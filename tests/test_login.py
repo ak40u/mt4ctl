@@ -49,6 +49,18 @@ def test_script_kills_only_its_process_group():
     assert "wineserver -k" not in out  # would nuke sibling terminals
 
 
+def test_script_uses_mktemp_chmod_and_cleanup_trap():
+    out = build_login_script("svc", "/d", "1000001", "Broker-Demo", "pw")
+    assert "mktemp " in out
+    assert "chmod 600" in out
+    assert "trap cleanup EXIT HUP INT TERM" in out
+
+
+def test_script_uses_marker_newer_than_for_success():
+    out = build_login_script("svc", "/d", "1000001", "Broker-Demo", "pw")
+    assert '"$ACCFILE" -nt "$MARKER"' in out
+
+
 async def test_login_live_requires_confirm(registry, monkeypatch):
     async def fail(*a, **k):
         raise AssertionError("ssh.run must not be called without confirmation")

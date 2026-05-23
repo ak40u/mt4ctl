@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from mt4ctl import scripts
 
 
@@ -33,6 +35,31 @@ def test_logs_script_tails_when_no_pattern():
     out = scripts.build_logs_script("/d", None, 10)
     assert "tail -n 10" in out
     assert "grep" not in out
+
+
+def test_logs_script_quotes_dangerous_data_dir_everywhere():
+    # The no-log message must use the quoted $DIR, never the raw value.
+    out = scripts.build_logs_script("x$(touch /tmp/pwned)", None, 10)
+    assert "DIR='x$(touch /tmp/pwned)'" in out
+    assert "printf " in out and '"$DIR"' in out
+    assert "(no log files in x$(touch" not in out  # no raw interpolation
+
+
+def test_status_script_handles_broker_failure_and_visibility():
+    out = scripts.build_status_script("broker.example.com", [("d", "s", "/d")])
+    assert "BROKER_FAIL" in out
+    assert "getent ahosts" in out  # IPv4 + IPv6
+    assert "PIDVIS" in out
+
+
+def test_control_script_rejects_bad_action():
+    with pytest.raises(ValueError, match="action must be"):
+        scripts.build_control_script("svc", "frobnicate")
+
+
+def test_control_script_propagates_exit_code():
+    out = scripts.build_control_script("mt4-x", "restart")
+    assert "exit $rc" in out
 
 
 def test_control_script_reports_state():

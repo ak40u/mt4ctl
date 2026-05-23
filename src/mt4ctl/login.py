@@ -5,13 +5,17 @@ copied to a new host cannot auto-login until it authenticates once on that host.
 This module automates that bootstrap:
 
 1. stop the systemd unit (frees the terminal slot)
-2. write a transient startup config (login/password/server) with mode 600
+2. write a transient startup config (login/password/server), created fresh by
+   ``mktemp`` with mode 600, inside the unit's working directory
 3. launch the terminal once, in its own process group, reusing the unit's
    ``WorkingDirectory`` / ``WINEPREFIX`` / ``DISPLAY``
-4. wait for ``config/accounts.ini`` to be rewritten — MetaTrader's signal that
-   authentication succeeded and credentials were re-encrypted for this host
-5. kill *only* that process group (siblings share the Wine prefix), shred the
-   config, and restart the unit, which now auto-logins from the saved file
+4. wait for ``config/accounts.ini`` to become newer than a marker stamped right
+   before launch — MetaTrader's signal that authentication succeeded and
+   credentials were re-encrypted for this host
+5. an ``EXIT``/signal trap *always* kills that process group (siblings share the
+   Wine prefix, so a blanket ``wineserver -k`` is wrong) and shreds the config,
+   even if an earlier step fails
+6. restart the unit, which now auto-logins from the saved file
 
 After this runs once, the terminal reconnects on its own across restarts.
 """
@@ -19,10 +23,8 @@ After this runs once, the terminal reconnects on its own across restarts.
 from __future__ import annotations
 
 from . import auth, scripts, ssh
-from .errors import ConfirmationRequiredError, Mt4ctlError
+from .errors import ConfirmationRequiredError, Mt4ctlError, RemoteCommandError
 from .models import Env, Registry
-
-LOGIN_INI = "mt4ctl-login.ini"
 
 
 def build_login_script(
@@ -43,7 +45,6 @@ def build_login_script(
             raise Mt4ctlError(f"{field} must not contain newlines")
     svc = scripts.sh_quote(service)
     ddir = scripts.sh_quote(data_dir)
-    ini_rel = scripts.sh_quote(LOGIN_INI)
     return f"""\
 set +e
 SVC={svc}
@@ -55,11 +56,24 @@ DISP=$(echo "$ENV" | tr ' ' '\\n' | sed -n 's/^DISPLAY=//p' | head -1)
 [ -z "$WORKDIR" ] && WORKDIR="$DDIR"
 [ -z "$DISP" ] && DISP=:0
 
-INI="$WORKDIR/"{ini_rel}
-ACCFILE="$DDIR/config/accounts.ini"
-BEFORE=$(stat -c %Y "$ACCFILE" 2>/dev/null || echo 0)
+INI=""
+MARKER=""
+PGID=""
+cleanup() {{
+  [ -n "$PGID" ] && kill -TERM -"$PGID" 2>/dev/null
+  sleep 1
+  [ -n "$PGID" ] && kill -KILL -"$PGID" 2>/dev/null
+  [ -n "$INI" ] && {{ shred -u "$INI" 2>/dev/null || rm -f "$INI"; }}
+  [ -n "$MARKER" ] && rm -f "$MARKER" 2>/dev/null
+}}
+trap cleanup EXIT HUP INT TERM
 
-umask 077
+INI=$(mktemp "$WORKDIR/mt4ctl-login.XXXXXX.ini" 2>/dev/null) || {{ echo "LOGIN|error=mktemp"; exit 1; }}
+chmod 600 "$INI"
+INIBASE=$(basename "$INI")
+ACCFILE="$DDIR/config/accounts.ini"
+MARKER=$(mktemp 2>/dev/null) || MARKER="/tmp/mt4ctl-marker.$$"
+
 cat > "$INI" <<'INICFG'
 [Common]
 Login={account}
@@ -74,21 +88,16 @@ Enabled=false
 INICFG
 
 cd "$WORKDIR" || {{ echo "LOGIN|error=workdir"; exit 1; }}
-WINEPREFIX="$WP" DISPLAY="$DISP" setsid wine terminal.exe /portable {ini_rel} >/dev/null 2>&1 &
+: > "$MARKER"
+sleep 1
+WINEPREFIX="$WP" DISPLAY="$DISP" setsid wine terminal.exe /portable "$INIBASE" >/dev/null 2>&1 &
 PGID=$!
 
 ok=0
-for i in $(seq 1 {wait_seconds}); do
-  AFTER=$(stat -c %Y "$ACCFILE" 2>/dev/null || echo 0)
-  if [ "$AFTER" -gt "$BEFORE" ]; then ok=1; break; fi
+for _ in $(seq 1 {wait_seconds}); do
+  if [ "$ACCFILE" -nt "$MARKER" ]; then ok=1; break; fi
   sleep 1
 done
-
-kill -TERM -"$PGID" 2>/dev/null
-sleep 2
-kill -KILL -"$PGID" 2>/dev/null
-shred -u "$INI" 2>/dev/null || rm -f "$INI"
-
 echo "LOGIN|ok=$ok"
 """
 
@@ -126,32 +135,36 @@ async def login(
         raise Mt4ctlError(f"terminal {terminal_id!r} has no account configured; pass account=")
     secret = auth.resolve_password(login_account, password)
 
-    # Stop the unit so the one-shot owns the terminal slot.
+    # Stop the unit so the one-shot owns the terminal slot; abort if it fails.
     await ssh.run(
-        host, scripts.build_control_script(term.service, "stop"), root=True, check=False
+        host, scripts.build_control_script(term.service, "stop"), root=True, check=True
     )
     script = build_login_script(
-        term.service,
-        term.data_dir,
-        login_account,
-        server,
-        secret,
-        wait_seconds=wait_seconds,
+        term.service, term.data_dir, login_account, server, secret, wait_seconds=wait_seconds
     )
     result = await ssh.run(host, script, timeout=wait_seconds + 30, check=False)
-    # Bring the unit back; it auto-logins from the now-saved accounts.ini.
-    await ssh.run(
-        host, scripts.build_control_script(term.service, "start"), root=True, check=False
-    )
 
-    ok = "LOGIN|ok=1" in result.stdout
-    if ok:
+    # Bring the unit back; it auto-logins from the now-saved accounts.ini.
+    try:
+        await ssh.run(
+            host, scripts.build_control_script(term.service, "start"), root=True, check=True
+        )
+        restarted = True
+    except RemoteCommandError:
+        restarted = False
+
+    if "LOGIN|ok=1" not in result.stdout:
         return (
-            f"{terminal_id}: logged in to account {login_account} on {server}; "
-            f"credentials saved, unit restarted for auto-reconnect."
+            f"{terminal_id}: login did not confirm within {wait_seconds}s "
+            f"(account {login_account} on {server}). Check `mt4_logs` and verify the "
+            f"server name and password."
+        )
+    if not restarted:
+        return (
+            f"{terminal_id}: logged in to account {login_account} on {server} and saved "
+            f"credentials, but restarting the unit failed — run `mt4_control` start."
         )
     return (
-        f"{terminal_id}: login did not confirm within {wait_seconds}s "
-        f"(account {login_account} on {server}). Check `mt4_logs` and verify the "
-        f"server name and password."
+        f"{terminal_id}: logged in to account {login_account} on {server}; "
+        f"credentials saved, unit restarted for auto-reconnect."
     )
