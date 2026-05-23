@@ -107,6 +107,42 @@ async def test_login_success_but_restart_failed(registry, monkeypatch):
     assert "restarting the unit failed" in msg
 
 
+async def test_login_validates_before_stopping(registry, monkeypatch):
+    calls: list[str] = []
+
+    async def record(host, script, **kw):
+        calls.append(script)
+        from mt4ctl.ssh import CommandResult
+
+        return CommandResult(0, "", "")
+
+    monkeypatch.setattr(ssh, "run", record)
+    with pytest.raises(Mt4ctlError, match="must not contain newlines"):
+        await login_mod.login(registry, "demo1", server="Bad\nName", password="x")
+    assert calls == []  # rejected before the unit was stopped
+
+
+async def test_login_restarts_after_bootstrap_timeout(registry, monkeypatch):
+    from mt4ctl.errors import RemoteCommandError
+    from mt4ctl.ssh import CommandResult
+
+    seen: list[str] = []
+
+    async def fake(host, script, **kw):
+        if "systemctl start" in script:
+            seen.append("start")
+            return CommandResult(0, "STATE|active|rc=0", "")
+        if "systemctl stop" in script:
+            seen.append("stop")
+            return CommandResult(0, "STATE|inactive|rc=0", "")
+        raise RemoteCommandError("h", 124, "command timed out")  # the bootstrap
+
+    monkeypatch.setattr(ssh, "run", fake)
+    msg = await login_mod.login(registry, "demo1", server="B", password="x")
+    assert "start" in seen  # unit restarted despite the bootstrap failure
+    assert "bootstrap failed" in msg
+
+
 async def test_login_requires_an_account():
     # A terminal with no account in the registry, and none passed -> rejected
     # before any SSH call is made.

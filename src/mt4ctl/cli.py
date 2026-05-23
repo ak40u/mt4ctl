@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -90,11 +91,16 @@ def _cmd_init(path: str | None) -> int:
         if path
         else Path.home() / ".config" / "mt4ctl" / "terminals.yaml"
     )
-    if target.exists():
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # Atomic create (O_EXCL) at mode 600: the registry becomes private host/account
+    # inventory, and this also closes the exists-then-write race.
+    try:
+        fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
         _print_err(f"error: {target} already exists; refusing to overwrite.")
         return 1
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(STARTER_REGISTRY, encoding="utf-8")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(STARTER_REGISTRY)
     print(
         f"wrote starter registry to {target}\n"
         "Edit it, then verify with:  mt4ctl list   (and:  mt4ctl doctor)"

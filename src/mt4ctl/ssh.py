@@ -63,7 +63,9 @@ def build_argv(host: Host, script: str, *, root: bool = False) -> list[str]:
     Exposed (and pure) so it can be unit-tested without a network.
     """
     payload = base64.b64encode(script.encode("utf-8")).decode("ascii")
-    inner = f"echo {payload} | base64 -d | bash"
+    # pipefail makes the pipeline fail closed: if base64 is missing or the
+    # decode fails, the command exits non-zero instead of running an empty bash.
+    inner = f"set -o pipefail; echo {payload} | base64 -d | bash"
     remote = _wrap_for_host(host, inner, root=root)
     return ["ssh", *SSH_BASE_OPTS, host.ssh, remote]
 
@@ -86,11 +88,16 @@ async def run(
         check: raise :class:`RemoteCommandError` on non-zero exit.
     """
     argv = build_argv(host, script, root=root)
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except OSError as exc:
+        raise RemoteCommandError(
+            host.id, 127, f"could not start ssh ({exc}); is the ssh client installed?"
+        ) from None
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except TimeoutError:

@@ -135,25 +135,44 @@ async def login(
         raise Mt4ctlError(f"terminal {terminal_id!r} has no account configured; pass account=")
     secret = auth.resolve_password(login_account, password)
 
-    # Stop the unit so the one-shot owns the terminal slot; abort if it fails.
-    await ssh.run(
-        host, scripts.build_control_script(term.service, "stop"), root=True, check=True
-    )
+    # Build and validate the bootstrap *before* stopping the unit, so a bad
+    # value (e.g. a newline) can never leave the terminal stopped.
     script = build_login_script(
         term.service, term.data_dir, login_account, server, secret, wait_seconds=wait_seconds
     )
-    result = await ssh.run(host, script, timeout=wait_seconds + 30, check=False)
 
-    # Bring the unit back; it auto-logins from the now-saved accounts.ini.
+    # Stop the unit so the one-shot owns the terminal slot; abort if it fails
+    # (the unit is untouched, so there is nothing to restore).
+    await ssh.run(
+        host, scripts.build_control_script(term.service, "stop"), root=True, check=True
+    )
+
+    bootstrap_out = ""
+    bootstrap_error: RemoteCommandError | None = None
     try:
-        await ssh.run(
-            host, scripts.build_control_script(term.service, "start"), root=True, check=True
-        )
-        restarted = True
-    except RemoteCommandError:
-        restarted = False
+        result = await ssh.run(host, script, timeout=wait_seconds + 30, check=False)
+        bootstrap_out = result.stdout
+    except RemoteCommandError as exc:
+        bootstrap_error = exc
+    finally:
+        # Always bring the unit back, even if the bootstrap timed out or raised.
+        try:
+            await ssh.run(
+                host,
+                scripts.build_control_script(term.service, "start"),
+                root=True,
+                check=True,
+            )
+            restarted = True
+        except RemoteCommandError:
+            restarted = False
 
-    if "LOGIN|ok=1" in result.stdout:
+    if bootstrap_error is not None:
+        msg = (
+            f"{terminal_id}: login bootstrap failed ({bootstrap_error}); "
+            f"account {login_account} on {server} was not logged in."
+        )
+    elif "LOGIN|ok=1" in bootstrap_out:
         msg = (
             f"{terminal_id}: logged in to account {login_account} on {server}; "
             f"credentials saved."

@@ -51,6 +51,40 @@ async def test_run_diagnostics_missing_tool_and_unit(registry, monkeypatch):
     assert by_label["terminal demo1"].status == "fail"
 
 
+async def test_run_diagnostics_truncated_probe_fails_closed(registry, monkeypatch):
+    async def fake_run(host, script, **kw):
+        return CommandResult(0, "TOOL|systemctl|ok\n", "")  # truncated/incomplete
+
+    monkeypatch.setattr(ssh, "run", fake_run)
+    monkeypatch.setenv("MT4CTL_CREDENTIALS", "/nonexistent/creds.json")
+    by_label = {c.label: c for c in await run_diagnostics(registry)}
+    assert by_label["host demo-box"].status == "fail"  # core tools unverified
+    assert by_label["terminal demo1"].status == "fail"  # terminal not reported
+
+
+async def test_run_diagnostics_probes_host_without_terminals(monkeypatch):
+    from mt4ctl.config import parse_registry
+
+    reg = parse_registry(
+        {
+            "hosts": {"h1": {"ssh": "h1"}, "h2": {"ssh": "h2"}},
+            "terminals": {
+                "t": {"host": "h1", "service": "s", "data_dir": "/d", "account": "1"}
+            },
+        }
+    )
+    probed: list[str] = []
+
+    async def fake_run(host, script, **kw):
+        probed.append(host.id)
+        return CommandResult(0, _ALL_OK, "")
+
+    monkeypatch.setattr(ssh, "run", fake_run)
+    monkeypatch.setenv("MT4CTL_CREDENTIALS", "/nonexistent/creds.json")
+    labels = {c.label for c in await run_diagnostics(reg)}
+    assert "host h2" in labels and "h2" in probed  # host with no terminals still probed
+
+
 async def test_run_diagnostics_unreachable_host(registry, monkeypatch):
     async def boom(host, script, **kw):
         raise RemoteCommandError(host.id, 255, "connection refused")

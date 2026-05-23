@@ -3,7 +3,8 @@ MCP tool.
 
 Runs offline-safe local checks plus a per-host SSH probe (required tools,
 systemd units, data dirs) and returns structured :class:`Check` rows that either
-surface can render.
+surface can render. The probe is verified for completeness, so a truncated or
+malformed result fails closed rather than reporting a misleading pass.
 """
 
 from __future__ import annotations
@@ -11,11 +12,17 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
+from typing import Literal
 
 from . import scripts, ssh
 from .auth import secrets_file
 from .errors import RemoteCommandError
 from .models import Host, Registry, Terminal
+
+Status = Literal["ok", "warn", "fail"]
+
+# Core tools the remote scripts depend on; the probe must report each as present.
+_CORE_TOOLS = ("systemctl", "ss", "getent", "stat", "base64")
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,7 +30,7 @@ class Check:
     """One diagnostic line: ``ok`` pass, ``warn`` advisory, ``fail`` problem."""
 
     label: str
-    status: str  # "ok" | "warn" | "fail"
+    status: Status
     detail: str = ""
 
 
@@ -43,27 +50,31 @@ async def _probe_host(host: Host, terms: list[Terminal]) -> list[Check]:
     except RemoteCommandError as exc:
         return [Check(f"host {host.id}", "fail", f"unreachable over SSH: {exc.stderr or exc}")]
 
-    missing_core: list[str] = []
+    tool_status: dict[str, str] = {}
     xtools: dict[str, str] = {}
     term_lines: dict[str, tuple[str, str]] = {}
     for line in result.stdout.splitlines():
         parts = line.split(scripts.SEP)
-        if parts[0] == "TOOL" and len(parts) == 3 and parts[2] == "missing":
-            missing_core.append(parts[1])
+        if parts[0] == "TOOL" and len(parts) == 3:
+            tool_status[parts[1]] = parts[2]
         elif parts[0] == "XTOOL" and len(parts) == 3:
             xtools[parts[1]] = parts[2]
         elif parts[0] == "TERM" and len(parts) == 4:
             term_lines[parts[1]] = (parts[2], parts[3])
 
-    checks = [
+    # Each core tool must be explicitly reported as ok; "not reported" (e.g. a
+    # truncated probe) counts against the host rather than passing silently.
+    bad_core = [t for t in _CORE_TOOLS if tool_status.get(t) != "ok"]
+    checks: list[Check] = [
         Check(
             f"host {host.id}",
-            "fail" if missing_core else "ok",
-            f"missing required tools: {', '.join(missing_core)}"
-            if missing_core
+            "fail" if bad_core else "ok",
+            f"missing/unverified tools: {', '.join(bad_core)}"
+            if bad_core
             else f"reachable, core tools present ({host.ssh})",
         )
     ]
+
     # Screenshots need a capture tool (imagemagick `import` *or* scrot) plus xdotool.
     shot_problems = []
     if xtools.get("import") != "ok" and xtools.get("scrot") != "ok":
@@ -78,13 +89,29 @@ async def _probe_host(host: Host, terms: list[Terminal]) -> list[Check]:
                 "; ".join(shot_problems) + " — mt4_screenshot unavailable",
             )
         )
+
     for term in terms:
-        unit, dd = term_lines.get(term.id, ("?", "?"))
+        unit, dd = term_lines.get(term.id, ("", ""))
+        if not unit and not dd:
+            checks.append(
+                Check(
+                    f"terminal {term.id}", "fail", "doctor probe did not report this terminal"
+                )
+            )
+            continue
         problems = []
-        if unit == "notfound":
-            problems.append(f"systemd unit {term.service!r} not found")
-        if dd == "missing":
-            problems.append(f"data_dir {term.data_dir!r} missing")
+        if unit != "found":
+            problems.append(
+                f"systemd unit {term.service!r} not found"
+                if unit == "notfound"
+                else f"unit status {unit!r}"
+            )
+        if dd != "ok":
+            problems.append(
+                f"data_dir {term.data_dir!r} missing"
+                if dd == "missing"
+                else f"data_dir status {dd!r}"
+            )
         checks.append(
             Check(
                 f"terminal {term.id}",
@@ -97,7 +124,7 @@ async def _probe_host(host: Host, terms: list[Terminal]) -> list[Check]:
 
 async def run_diagnostics(registry: Registry) -> list[Check]:
     """Run all diagnostics and return them in a stable, readable order."""
-    checks = [
+    checks: list[Check] = [
         Check(
             "registry",
             "ok",
@@ -106,8 +133,9 @@ async def run_diagnostics(registry: Registry) -> list[Check]:
         _secrets_check(),
     ]
     grouped = registry.by_host()
+    # Probe every configured host, including any with no terminals.
     host_results = await asyncio.gather(
-        *(_probe_host(registry.host(hid), terms) for hid, terms in grouped.items())
+        *(_probe_host(registry.host(hid), grouped.get(hid, [])) for hid in registry.hosts)
     )
     for chunk in host_results:
         checks.extend(chunk)

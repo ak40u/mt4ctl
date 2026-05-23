@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import base64
 
+import pytest
+
 from mt4ctl import ssh
+from mt4ctl.errors import RemoteCommandError
 from mt4ctl.models import Host, HostKind
 from mt4ctl.ssh import CommandResult, build_argv
 
@@ -50,6 +53,20 @@ def test_multiline_and_special_chars_survive_encoding():
     script = 'echo "a|b"\nfor x in 1 2; do echo $x; done'
     argv = build_argv(host, script)
     assert _payload(argv) == script
+
+
+def test_build_argv_fails_closed_with_pipefail():
+    argv = build_argv(Host(id="h", ssh="h"), "echo hi")
+    assert "set -o pipefail" in argv[-1]
+
+
+async def test_run_normalizes_local_spawn_failure(monkeypatch):
+    async def boom(*a, **k):
+        raise FileNotFoundError("ssh")
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", boom)
+    with pytest.raises(RemoteCommandError, match="could not start ssh"):
+        await ssh.run(Host(id="h", ssh="h"), "echo hi")
 
 
 async def test_fetch_bytes_quotes_remote_path(monkeypatch):

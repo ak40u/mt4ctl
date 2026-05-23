@@ -71,6 +71,20 @@ def test_control_script_propagates_exit_code():
     assert "exit $rc" in out
 
 
+def test_status_script_captures_state_without_extra_line():
+    # `is-active` prints inactive/failed AND exits non-zero; `|| echo unknown`
+    # would append a second line and corrupt the protocol.
+    out = scripts.build_status_script(None, [("d", "s", "/d")])
+    assert "|| echo unknown" not in out
+    assert '[ -n "$state" ] || state=unknown' in out
+
+
+def test_control_script_captures_state_without_extra_line():
+    out = scripts.build_control_script("svc", "restart")
+    assert "|| echo unknown" not in out
+    assert '[ -n "$st" ] || st=unknown' in out
+
+
 def test_control_script_reports_state():
     out = scripts.build_control_script("mt4-x", "restart")
     assert "systemctl restart 'mt4-x'" in out

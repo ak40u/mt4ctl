@@ -63,7 +63,8 @@ CURUSER=$(id -un 2>/dev/null)
 
 emit() {{
   id="$1"; svc="$2"; dir="$3"
-  state=$(systemctl is-active "$svc" 2>/dev/null || echo unknown)
+  state=$(systemctl is-active "$svc" 2>/dev/null)
+  [ -n "$state" ] || state=unknown
   log=$(ls -t "$dir"/logs/*.log 2>/dev/null | head -1)
   if [ -n "$log" ]; then
     mtime=$(stat -c %Y "$log" 2>/dev/null || echo "$NOW")
@@ -136,7 +137,9 @@ set +e
 systemctl {action} {svc}
 rc=$?
 sleep 1
-echo "STATE{SEP}$(systemctl is-active {svc} 2>/dev/null || echo unknown){SEP}rc=$rc"
+st=$(systemctl is-active {svc} 2>/dev/null)
+[ -n "$st" ] || st=unknown
+echo "STATE{SEP}$st{SEP}rc=$rc"
 exit $rc
 """
 

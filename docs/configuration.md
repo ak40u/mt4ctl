@@ -5,13 +5,15 @@
 
 ## Where the registry is loaded from
 
-The first existing file wins:
+If `MT4CTL_CONFIG` is set, it **must** point to an existing file — `mt4ctl` fails
+fast rather than falling back, so a typo doesn't silently load the wrong registry.
+Otherwise it searches, first existing wins:
 
-1. the path in `MT4CTL_CONFIG`
-2. `$XDG_CONFIG_HOME/mt4ctl/terminals.yaml` (defaults to `~/.config/mt4ctl/terminals.yaml`)
-3. `./terminals.yaml` in the current working directory
+1. `$XDG_CONFIG_HOME/mt4ctl/terminals.yaml` (defaults to `~/.config/mt4ctl/terminals.yaml`)
+2. `./terminals.yaml` in the current working directory
 
-Start from [`../examples/terminals.example.yaml`](../examples/terminals.example.yaml).
+Start from [`../examples/terminals.example.yaml`](../examples/terminals.example.yaml)
+or run `mt4ctl init`.
 
 ## Hosts
 

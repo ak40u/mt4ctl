@@ -75,6 +75,20 @@ def test_init_writes_starter_and_refuses_overwrite(monkeypatch, tmp_path, capsys
     assert "already exists" in capsys.readouterr().err
 
 
+def test_init_creates_private_file(monkeypatch, tmp_path):
+    import os
+    import stat
+
+    if os.name != "posix":
+        pytest.skip("POSIX permission check")
+    target = tmp_path / "terminals.yaml"
+    monkeypatch.setattr("sys.argv", ["mt4ctl", "init", str(target)])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 0
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
 def test_doctor_runs_and_sets_exit_code(monkeypatch, tmp_path, capsys):
     _use_registry(monkeypatch, tmp_path)
 
