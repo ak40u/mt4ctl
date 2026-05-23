@@ -148,6 +148,18 @@ schema and [`docs/configuration.md`](docs/configuration.md) for details.
 > **Keep your populated registry private.** It maps your accounts and
 > infrastructure. The default `.gitignore` excludes `terminals.yaml`.
 
+## Setting up terminal hosts
+
+`mt4ctl` manages terminals; it doesn't install them. To stand up a host that runs
+MT4 headless (Wine + Xvfb + `systemd`) so `mt4ctl` has something to drive:
+
+- **[Ubuntu / Linux server](docs/install-linux-ubuntu.md)** — Wine, the Xvfb +
+  window-manager display, fonts (incl. the real Wingdings the MT4 smiley needs),
+  `systemd` units, and the one-time headless login.
+- **[Windows via WSL2](docs/install-windows-wsl.md)** — the same stack inside
+  WSL2, plus enabling WSL + `systemd`, copying fonts from the Windows C: drive,
+  boot autostart, and the WSL-specific gotchas.
+
 ## Connect to an MCP client
 
 **Claude Code** — one command wires it up (user scope = available in every project):
