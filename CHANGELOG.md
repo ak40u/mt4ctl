@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `mt4_adopt` now reports the live charts on the host that are **not** in the
+  bundle (left foreign), so the operator can see at a glance what adopt left
+  untouched (e.g. a watchdog's chart). Transparency only — it reports, never
+  touches. New `AdoptResult.foreign` field, surfaced by the tool/CLI output.
+
 ## [0.5.0] - 2026-05-23
 
 ### Added

@@ -67,6 +67,10 @@ that the farm runs this bundle; a missing file is refused (no partial manifest).
 A self-contained bundle is required (every chart's `.ex4` present), same as deploy.
 A live terminal needs `confirm=true`.
 
+For transparency, adopt also **lists any live charts on the host that are not in the
+bundle** — so you can confirm at a glance what it left foreign (a watchdog's chart,
+say) rather than having to trust that it did. It reports them; it does not touch them.
+
 > **`.chr` caveat.** `.ex4` files are never rewritten by MT4, so adopt records them
 > exactly and a later `--dry-run` stays clean. MT4 *does* rewrite `.chr` on exit,
 > so a `.chr` adopted from a live terminal may show as `update` on a deploy taken

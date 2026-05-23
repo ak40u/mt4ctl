@@ -178,6 +178,12 @@ def _fmt_adopt_result(result: AdoptResult) -> str:
             f"({len(result.drifted)}):"
         )
         lines.extend(f"  {p}" for p in result.drifted)
+    if result.foreign:
+        lines.append(
+            f"left foreign — live on host, not in this bundle, untouched "
+            f"({len(result.foreign)}):"
+        )
+        lines.extend(f"  {p}" for p in result.foreign)
     lines.append(f"manifest: {result.manifest_path}")
     lines.append(
         f"next: verify with `mt4_deploy {result.terminal} <bundle> --dry-run` — it should "

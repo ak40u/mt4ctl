@@ -518,6 +518,7 @@ async def test_adopt_happy_path_records_bundle_footprint(registry, monkeypatch, 
     result = await operations.adopt(registry, "demo1", bundle)
     assert set(result.adopted) == set(files)
     assert result.drifted == ()
+    assert result.foreign == ()  # no foreign charts reported by the host
     assert result.unit_user == "pavel"
     assert _order(fake.calls, "lock_acquire", "remote_state", "manifest_put", "lock_release")
     assert _put_manifest_files(fake) == files  # manifest = on-disk hashes
@@ -581,10 +582,12 @@ async def test_adopt_is_bundle_scoped_watchdog_not_recorded(registry, monkeypatc
         charts={"profiles/default/watchdog.chr": "Watch\\Dog"},  # foreign chart live on host
     )
     _install(monkeypatch, fake)
-    await operations.adopt(registry, "demo1", bundle)
+    result = await operations.adopt(registry, "demo1", bundle)
     recorded = _put_manifest_files(fake)
     assert "profiles/default/watchdog.chr" not in recorded  # foreign file never adopted
     assert set(recorded) == set(files)
+    # ...and it is reported as foreign so the operator sees it was left untouched
+    assert result.foreign == ("profiles/default/watchdog.chr",)
 
 
 async def test_adopt_live_requires_confirm_then_proceeds(registry, monkeypatch, tmp_path):

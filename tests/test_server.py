@@ -194,6 +194,7 @@ def test_fmt_adopt_result_clean():
         terminal="demo3",
         adopted=("MQL4/Experts/A.ex4", "profiles/default/a.chr"),
         drifted=(),
+        foreign=(),
         unit_user="pavel",
         manifest_path="/d/.mt4ctl/deployed.json",
     )
@@ -202,6 +203,7 @@ def test_fmt_adopt_result_clean():
     assert "/d/.mt4ctl/deployed.json" in out
     assert "--dry-run" in out  # next-step points at deploy dry-run
     assert "differs" not in out  # no drift section when none
+    assert "left foreign" not in out  # no foreign section when none
 
 
 def test_fmt_adopt_result_drift():
@@ -209,12 +211,27 @@ def test_fmt_adopt_result_drift():
         terminal="demo3",
         adopted=("profiles/default/a.chr",),
         drifted=("profiles/default/a.chr",),
+        foreign=(),
         unit_user="pavel",
         manifest_path="/d/.mt4ctl/deployed.json",
     )
     out = _fmt_adopt_result(res)
     assert "differs from the bundle" in out
     assert "profiles/default/a.chr" in out
+
+
+def test_fmt_adopt_result_reports_foreign_charts():
+    res = AdoptResult(
+        terminal="demo3",
+        adopted=("profiles/default/a.chr",),
+        drifted=(),
+        foreign=("profiles/default/watchdog.chr",),
+        unit_user="pavel",
+        manifest_path="/d/.mt4ctl/deployed.json",
+    )
+    out = _fmt_adopt_result(res)
+    assert "left foreign" in out and "untouched" in out
+    assert "profiles/default/watchdog.chr" in out
 
 
 async def test_mt4_adopt_is_registered_without_dry_run():

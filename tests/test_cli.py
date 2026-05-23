@@ -160,6 +160,7 @@ def test_adopt_parses_args_and_calls_operation(monkeypatch, tmp_path, capsys):
             terminal=terminal,
             adopted=("MQL4/Experts/A.ex4",),
             drifted=(),
+            foreign=(),
             unit_user="trader",
             manifest_path="/d/.mt4ctl/deployed.json",
         )

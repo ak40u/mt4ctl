@@ -110,8 +110,10 @@ cutover**). On a terminal whose strategies mt4ctl did not place, the first
 into `deployed.json` at the files' current on-disk hashes. **Records-only** — no
 upload, no restart, no preview (so no `dry_run`). Bundle-scoped (foreign files like
 a watchdog's chart stay foreign); every bundle file must already be present on the
-host or it refuses. After adopt, `mt4_deploy <t> <bundle> --dry-run` should report
-"no changes". See [deploy.md](deploy.md#adopting-an-existing-farm-first-cutover).
+host or it refuses. It also **reports any live charts on the host that are not in
+the bundle**, so you can see exactly what was left foreign (e.g. a watchdog). After
+adopt, `mt4_deploy <t> <bundle> --dry-run` should report "no changes". See
+[deploy.md](deploy.md#adopting-an-existing-farm-first-cutover).
 
 ## `mt4_login` · mutating
 

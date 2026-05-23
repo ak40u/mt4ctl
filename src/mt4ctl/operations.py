@@ -647,6 +647,9 @@ async def adopt(
             )
         manifest_files = {rel: state.remote_hashes[rel] for rel in dest_paths}
         drifted = tuple(rel for rel in dest_paths if state.remote_hashes[rel] != files[rel])
+        # Transparency: live charts on the host that the bundle does not include —
+        # adopt leaves them foreign (e.g. a watchdog's chart). Reported, not touched.
+        foreign = tuple(sorted(c for c in state.remote_chart_refs if c not in files))
         await ssh.run(
             host,
             scripts.build_manifest_put_script(
@@ -663,6 +666,7 @@ async def adopt(
         terminal=term.id,
         adopted=tuple(dest_paths),
         drifted=drifted,
+        foreign=foreign,
         unit_user=unit_user,
         manifest_path=f"{term.data_dir}/{scripts.MANIFEST_REL}",
     )
