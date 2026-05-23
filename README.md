@@ -76,15 +76,30 @@ the MCP layer stays a one-line-per-tool shell.
 
 ## Install
 
+The fastest path needs no clone and no global install — [`uv`](https://docs.astral.sh/uv/)
+runs `mt4ctl` straight from the repo and fetches a matching Python itself:
+
 ```bash
-pipx install git+https://github.com/ak40u/mt4ctl.git
-# or, for development:
+uvx --from git+https://github.com/ak40u/mt4ctl mt4ctl   # runs the stdio server
+```
+
+Prefer a persistent `mt4ctl` command? Install it with `uv` or `pipx`:
+
+```bash
+uv tool install git+https://github.com/ak40u/mt4ctl
+# or
+pipx install git+https://github.com/ak40u/mt4ctl
+```
+
+For development:
+
+```bash
 git clone https://github.com/ak40u/mt4ctl.git && cd mt4ctl
 python -m venv venv && source venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-Requires Python 3.11+ on the machine running the server, and SSH access to your
+The server machine needs either `uv` or Python 3.11+, plus SSH access to your
 hosts. The remote hosts need the usual tools `mt4ctl` shells out to: `systemctl`,
 `ss`, `getent`, and (for screenshots) `imagemagick`/`scrot` + `xdotool`.
 
@@ -107,20 +122,46 @@ schema and [`docs/configuration.md`](docs/configuration.md) for details.
 
 ## Connect to an MCP client
 
-**Claude Code** (`.mcp.json` in your project or `~/.claude.json`):
+**Claude Code** — one command wires it up (user scope = available in every project):
+
+```bash
+claude mcp add --scope user mt4ctl \
+  --env MT4CTL_CONFIG="$HOME/.config/mt4ctl/terminals.yaml" \
+  -- uvx --from git+https://github.com/ak40u/mt4ctl mt4ctl
+```
+
+Or commit a project `.mcp.json` to share with a team (Claude Code expands `${HOME}`):
 
 ```json
 {
   "mcpServers": {
     "mt4ctl": {
-      "command": "mt4ctl",
-      "env": { "MT4CTL_CONFIG": "/home/you/.config/mt4ctl/terminals.yaml" }
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/ak40u/mt4ctl", "mt4ctl"],
+      "env": { "MT4CTL_CONFIG": "${HOME}/.config/mt4ctl/terminals.yaml" }
     }
   }
 }
 ```
 
-**Claude Desktop** (`claude_desktop_config.json`) uses the same `mcpServers` shape.
+**Claude Desktop** — Settings → Developer → Edit Config (`claude_desktop_config.json`),
+same shape but use an **absolute** config path (Desktop does not expand `${HOME}`),
+and an absolute `command` path if `uvx` is not on the GUI app's `PATH` (`which uvx`):
+
+```json
+{
+  "mcpServers": {
+    "mt4ctl": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/ak40u/mt4ctl", "mt4ctl"],
+      "env": { "MT4CTL_CONFIG": "/Users/you/.config/mt4ctl/terminals.yaml" }
+    }
+  }
+}
+```
+
+> Installed `mt4ctl` persistently (uv/pipx)? Replace `command`/`args` with just
+> `"command": "mt4ctl"`.
 
 ## Tools
 
