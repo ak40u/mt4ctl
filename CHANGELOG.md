@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-23
+
 ### Added
 
 - `mt4_deploy` — idempotent, managed-subset strategy deploy ("kubectl-apply for

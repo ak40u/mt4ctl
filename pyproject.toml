@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mt4ctl"
-version = "0.3.0"
+version = "0.4.0"
 description = "MCP server for managing headless MetaTrader terminals over SSH (Wine + systemd)"
 readme = "README.md"
 requires-python = ">=3.11"
