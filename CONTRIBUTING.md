@@ -34,9 +34,12 @@ pytest
 
 ## Releasing
 
-Releases are published as **GitHub Releases** with the built wheel + sdist
-attached — no PyPI account required. Users install straight from git (optionally
-pinned to a tag): `uvx --from git+https://github.com/ak40u/mt4ctl@v0.1.0 mt4ctl`.
+Tagging a version publishes to **PyPI** via Trusted Publishing (OIDC — no stored
+tokens) and creates a **GitHub Release** with the wheel + sdist attached.
+
+One-time PyPI setup (account owner): add a pending publisher at
+https://pypi.org/manage/account/publishing/ for project `mt4ctl`, owner `ak40u`,
+repo `mt4ctl`, workflow `release.yml`, environment `pypi`.
 
 To cut a release:
 
@@ -49,13 +52,7 @@ To cut a release:
    ```
 
 `release.yml` verifies the tag matches the project version, builds and
-`twine check`s the sdist/wheel, and creates a GitHub Release with the artifacts
-attached.
-
-> Want PyPI later? Re-add a `publish-pypi` job using
-> [`pypa/gh-action-pypi-publish`](https://github.com/pypa/gh-action-pypi-publish)
-> with `id-token: write` and register a Trusted Publisher on PyPI — no tokens
-> needed.
+`twine check`s the artifacts, publishes to PyPI, and creates the GitHub Release.
 
 ## Adding a tool
 
