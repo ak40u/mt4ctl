@@ -36,24 +36,6 @@ jobs:
           name: dist
           path: dist/
 
-  publish-pypi:
-    needs: build
-    runs-on: ubuntu-latest
-    # Must match the environment registered with the PyPI Trusted Publisher.
-    environment:
-      name: pypi
-      url: https://pypi.org/p/mt4ctl
-    permissions:
-      id-token: write # OIDC token for PyPI Trusted Publishing (no API token needed)
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-
   github-release:
     needs: build
     runs-on: ubuntu-latest

@@ -10,7 +10,6 @@ check status, read logs, capture screenshots, control the systemd lifecycle, and
 perform the tricky **headless first-login** — all as clean, typed tools.
 
 [![CI](https://github.com/ak40u/mt4ctl/actions/workflows/ci.yml/badge.svg)](https://github.com/ak40u/mt4ctl/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/mt4ctl)](https://pypi.org/project/mt4ctl/)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/MCP-server-7C3AED)](https://modelcontextprotocol.io)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
