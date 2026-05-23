@@ -29,7 +29,8 @@ coverage.xml
 *.png
 plans/
 
-# --- editors / OS ---
+# --- editors / OS / local agent config ---
 .idea/
 .vscode/
+.claude/
 .DS_Store
