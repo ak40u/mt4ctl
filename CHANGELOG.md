@@ -6,6 +6,25 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-23
+
+### Added
+
+- `mt4_adopt` — take an already-running ("brownfield") terminal under management:
+  the first cutover. Records the bundle's footprint into `.mt4ctl/deployed.json` at
+  the files' current on-disk hashes so a subsequent `mt4_deploy` reconciles from
+  that baseline. Records-only — no upload, no restart, no preview; bundle-scoped
+  (foreign files like a watchdog's chart stay foreign); refuses if any bundle file
+  is absent on the host. Exposed via the `mt4_adopt` MCP tool and `mt4ctl adopt`
+  CLI. Adds a canonical `deploy.build_manifest` serializer (the inverse of
+  `parse_manifest`, parity-tested against the deploy apply path).
+
+### Fixed
+
+- `docs/deploy.md`: corrected the file-ownership rationale — MetaTrader rewrites
+  its `.chr` files on exit, but `deployed.json` is mt4ctl's own manifest (never
+  touched by MetaTrader); it is kept unit-owned so the next mt4ctl run can rewrite it.
+
 ## [0.4.0] - 2026-05-23
 
 ### Added
