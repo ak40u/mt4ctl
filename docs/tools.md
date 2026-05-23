@@ -30,7 +30,10 @@ live-main    live  2000001      active    down   41s     <-- check
   established `:443` sockets.
 - **LOG AGE** — seconds since the newest log file was written.
 
-A terminal is healthy when `SERVICE=active` and `CONN=up`.
+A terminal is healthy when `SERVICE=active` and `CONN=up`. Unhealthy rows carry a
+short reason (e.g. `<- no broker connection`), and the output ends with a
+grouped **next steps** section telling the operator what to do (e.g. run
+`mt4_login` for terminals that were never logged in).
 
 ## `mt4_logs`
 
@@ -83,8 +86,9 @@ unit so it auto-reconnects from the saved (re-encrypted) credentials. See
 
 No arguments. Read-only.
 
-Diagnoses the setup: registry, secrets-file permissions, and — per host — SSH
-reachability, required remote tools, systemd units, and data directories. Returns
-a ✓/!/✗ checklist. Use it when a terminal is unexpectedly `unknown` or
-`mt4_status` looks wrong. The same checks are available from the shell as
-`mt4ctl doctor`.
+Diagnoses the setup: registry, secrets-file permissions, per-host SSH
+reachability, required remote tools, systemd units, data directories, and
+**broker-connection health** (it warns when terminals are active but not
+connected, rather than reporting a misleading "all passed"). Returns a ✓/!/✗
+checklist. Use it when a terminal is unexpectedly `unknown` or `mt4_status` looks
+wrong. The same checks are available from the shell as `mt4ctl doctor`.

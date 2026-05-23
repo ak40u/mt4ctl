@@ -14,7 +14,7 @@ import os
 from dataclasses import dataclass
 from typing import Literal
 
-from . import scripts, ssh
+from . import operations, scripts, ssh
 from .auth import secrets_file
 from .errors import RemoteCommandError
 from .models import Host, Registry, Terminal
@@ -139,6 +139,23 @@ async def run_diagnostics(registry: Registry) -> list[Check]:
     )
     for chunk in host_results:
         checks.extend(chunk)
+
+    # Broker/login health — doctor must not report "all passed" while terminals
+    # are active but not connected to a broker.
+    statuses = await operations.status(registry)
+    down = sorted(s.id for s in statuses if s.connected is False)
+    if down:
+        checks.append(
+            Check(
+                "broker connections",
+                "warn",
+                f"{len(down)} active but not connected: {', '.join(down)} "
+                "— run mt4_login if not logged in",
+            )
+        )
+    else:
+        connected = sum(s.connected is True for s in statuses)
+        checks.append(Check("broker connections", "ok", f"{connected} connected"))
     return checks
 
 

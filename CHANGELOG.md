@@ -12,6 +12,10 @@ to [Semantic Versioning](https://semver.org/).
   and `mt4ctl doctor` (check registry, SSH, remote tools, units, data dirs);
   `serve` remains the default with no subcommand.
 - `mt4_doctor` MCP tool exposing the same diagnostics to the agent.
+- `mt4_status` now explains *why* a terminal is unhealthy (e.g. "no broker
+  connection") and ends with grouped **next steps** (e.g. run `mt4_login`).
+- `doctor`/`mt4_doctor` now check broker-connection health and warn when
+  terminals are active but not connected, instead of reporting "all passed".
 
 ## [0.1.0] - 2026-05-23
 

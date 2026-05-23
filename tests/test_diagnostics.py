@@ -85,6 +85,22 @@ async def test_run_diagnostics_probes_host_without_terminals(monkeypatch):
     assert "host h2" in labels and "h2" in probed  # host with no terminals still probed
 
 
+async def test_run_diagnostics_flags_disconnected_terminals(registry, monkeypatch):
+    async def fake_run(host, script, **kw):
+        if "checkterm" in script:  # the doctor probe
+            return CommandResult(0, _ALL_OK, "")
+        # the status probe: demo1 active but down, live-main active + connected
+        out = "TERM|demo1|active|5|0|\nTERM|live-main|active|3|2|login on B\n"
+        return CommandResult(0, out, "")
+
+    monkeypatch.setattr(ssh, "run", fake_run)
+    monkeypatch.setenv("MT4CTL_CREDENTIALS", "/nonexistent/creds.json")
+    by_label = {c.label: c for c in await run_diagnostics(registry)}
+    assert by_label["broker connections"].status == "warn"
+    assert "demo1" in by_label["broker connections"].detail
+    assert "mt4_login" in by_label["broker connections"].detail
+
+
 async def test_run_diagnostics_unreachable_host(registry, monkeypatch):
     async def boom(host, script, **kw):
         raise RemoteCommandError(host.id, 255, "connection refused")

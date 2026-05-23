@@ -49,6 +49,18 @@ def test_fmt_status_surfaces_unreachable_cause():
     assert "host unreachable" in out
 
 
+def test_fmt_status_gives_reason_and_next_step_for_disconnected():
+    out = _fmt_status([_status(id="demo1", service_state="active", connected=False)])
+    assert "no broker connection" in out  # per-row reason
+    assert "next steps:" in out  # actionable footer
+    assert "mt4_login" in out
+
+
+def test_fmt_status_no_next_steps_when_all_healthy():
+    out = _fmt_status([_status(connected=True)])
+    assert "next steps:" not in out
+
+
 def test_fmt_status_unknown_connection_renders_question_mark():
     out = _fmt_status([_status(connected=None, log_age_seconds=None)])
     assert "?" in out

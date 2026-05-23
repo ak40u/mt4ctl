@@ -58,21 +58,48 @@ def _guard(fn: Callable[..., Awaitable[R]]) -> Callable[..., Awaitable[R | str]]
     return wrapper
 
 
+def _diagnose(s: TerminalStatus) -> tuple[str, str]:
+    """Return ``(reason, next_action)`` for a non-healthy terminal, else ``("", "")``.
+
+    Turns a bare ``active/down`` into something the operator can act on instead of
+    guessing why a terminal is unhealthy.
+    """
+    if s.healthy:
+        return ("", "")
+    if s.service_state == "unknown":
+        return ("host unreachable", "run `mt4_doctor`; check the SSH alias and key")
+    if s.service_state != "active":
+        return (f"unit {s.service_state}", "run `mt4_control <id> start`")
+    if s.connected is None:
+        return ("connection unknown", "run `mt4_doctor` (attribution needs same-user or root)")
+    return (
+        "no broker connection",
+        "check `mt4_logs <id>`; run `mt4_login <id>` if not logged in",
+    )
+
+
 def _fmt_status(rows: list[TerminalStatus]) -> str:
     if not rows:
         return "no terminals match."
     header = f"{'TERMINAL':<12} {'ENV':<5} {'ACCOUNT':<12} {'SERVICE':<9} {'CONN':<6} {'LOG AGE':<8}"
     lines = [header, "-" * len(header)]
+    # group non-healthy terminals by (reason, action) so the footer stays compact
+    next_steps: dict[tuple[str, str], list[str]] = {}
     for s in rows:
         conn = {True: "up", False: "down", None: "?"}[s.connected]
         age = "-" if s.log_age_seconds is None else f"{s.log_age_seconds}s"
-        # Surface the cause (e.g. "host unreachable") for anything not healthy,
-        # rather than hiding it behind a generic flag.
-        detail = "" if s.healthy else "  <- " + (s.last_event or "check")
+        reason, action = _diagnose(s)
+        detail = f"  <- {reason}" if reason else ""
         lines.append(
             f"{s.id:<12} {s.env.value:<5} {(s.account or '-'):<12} "
             f"{s.service_state:<9} {conn:<6} {age:<8}{detail}"
         )
+        if action:
+            next_steps.setdefault((reason, action), []).append(s.id)
+    if next_steps:
+        lines.append("\nnext steps:")
+        for (reason, action), ids in next_steps.items():
+            lines.append(f"  {reason} ({', '.join(ids)}): {action}")
     return "\n".join(lines)
 
 
