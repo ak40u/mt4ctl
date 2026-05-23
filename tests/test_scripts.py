@@ -54,6 +54,26 @@ def test_status_script_handles_broker_failure_and_visibility():
     assert "svcuser=$(systemctl show -p User" in out
 
 
+def test_experts_script_reads_master_and_charts():
+    out = scripts.build_experts_script("/home/t/demo1")
+    assert "config/terminal.ini" in out
+    assert "^Experts=" in out
+    assert "profiles/default/*.chr" in out
+    assert "MASTER|" in out and "EA|" in out
+
+
+def test_info_script_extracts_build_and_ping():
+    out = scripts.build_info_script("/home/t/demo1")
+    assert "build [0-9]+" in out
+    assert "ping:" in out
+    assert "BUILD|" in out and "LOGIN|" in out
+
+
+def test_experts_script_strips_crlf():
+    out = scripts.build_experts_script("/home/t/demo1")
+    assert "sub(/\\r$/" in out  # CRLF guard so flags parse and lines don't over-split
+
+
 def test_doctor_script_probes_tools_and_terminals():
     out = scripts.build_doctor_script([("t1", "mt4-t1", "/home/t/t1")])
     assert "command -v" in out

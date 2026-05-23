@@ -92,3 +92,37 @@ reachability, required remote tools, systemd units, data directories, and
 connected, rather than reporting a misleading "all passed"). Returns a ✓/!/✗
 checklist. Use it when a terminal is unexpectedly `unknown` or `mt4_status` looks
 wrong. The same checks are available from the shell as `mt4ctl doctor`.
+
+## `mt4_ea_list`
+
+| Arg | Type | Default | Description |
+| --- | --- | --- | --- |
+| `terminal` | string | `"all"` | a terminal id, or "all" |
+
+Read-only. Lists the expert advisors (strategies) attached to a terminal, parsed
+from its chart files. For a single terminal it lists every EA; for `"all"` it
+shows the count per terminal.
+
+## `mt4_autotrading`
+
+| Arg | Type | Default | Description |
+| --- | --- | --- | --- |
+| `terminal` | string | `"all"` | a terminal id, or "all" |
+
+Read-only. Reports whether algo-trading is enabled, at two levels: the terminal
+**master AutoTrading** switch (from `terminal.ini` `Experts=` — authoritative)
+and how many attached experts have live-trading enabled. Flags terminals whose
+master is off (nothing trades) or whose experts have live-trading disabled.
+
+> The per-EA live-trading flag is a *best-effort* decode of the MT4 chart-expert
+> `flags` bitmask (low bit); the terminal master switch is authoritative.
+
+## `mt4_info`
+
+| Arg | Type | Default | Description |
+| --- | --- | --- | --- |
+| `terminal` | string | `"all"` | a terminal id, or "all" |
+
+Read-only. Reports each terminal's build, broker server, and last broker ping,
+parsed from its log — useful to confirm what build/broker a terminal is on and
+its connection latency.

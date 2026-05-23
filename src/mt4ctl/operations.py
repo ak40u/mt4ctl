@@ -14,7 +14,18 @@ from pathlib import Path
 
 from . import scripts, ssh
 from .errors import ConfirmationRequiredError, RemoteCommandError
-from .models import Env, Host, Registry, Terminal, TerminalStatus
+from .models import (
+    Env,
+    Expert,
+    ExpertsReport,
+    Host,
+    Registry,
+    Terminal,
+    TerminalInfo,
+    TerminalStatus,
+)
+
+_PING_RE = re.compile(r"login on (\S+) through[^(]*\(ping: ([0-9.]+) ms\)")
 
 CONTROL_ACTIONS = ("start", "stop", "restart")
 
@@ -120,6 +131,52 @@ async def logs(
             f"and BatchMode access, then retry."
         )
     return result.stdout.strip() or "(no log output)"
+
+
+async def experts(registry: Registry, terminal_id: str) -> ExpertsReport:
+    """Report the AutoTrading master switch and attached experts for a terminal."""
+    term = registry.terminal(terminal_id)
+    host = registry.host_of(term)
+    try:
+        result = await ssh.run(host, scripts.build_experts_script(term.data_dir), check=False)
+    except RemoteCommandError as exc:
+        # One unreachable host must not blank a whole fan-out (matches status()).
+        return ExpertsReport(terminal=terminal_id, master=None, experts=[], error=str(exc))
+    master: bool | None = None
+    eas: list[Expert] = []
+    for line in result.stdout.splitlines():
+        parts = line.split(scripts.SEP)
+        if parts[0] == "MASTER" and len(parts) >= 2:
+            master = {"1": True, "0": False}.get(parts[1].strip())
+        elif parts[0] == "EA" and len(parts) >= 3:
+            try:
+                flags = int(parts[2])
+            except ValueError:
+                flags = -1
+            eas.append(Expert(name=parts[1], flags=flags))
+    return ExpertsReport(terminal=terminal_id, master=master, experts=eas)
+
+
+async def info(registry: Registry, terminal_id: str) -> TerminalInfo:
+    """Report build / broker server / last ping for a terminal, parsed from logs."""
+    term = registry.terminal(terminal_id)
+    host = registry.host_of(term)
+    try:
+        result = await ssh.run(host, scripts.build_info_script(term.data_dir), check=False)
+    except RemoteCommandError as exc:
+        return TerminalInfo(
+            terminal=terminal_id, build=None, server=None, ping_ms=None, error=str(exc)
+        )
+    build = server = None
+    ping: float | None = None
+    for line in result.stdout.splitlines():
+        parts = line.split(scripts.SEP, 1)
+        if parts[0] == "BUILD" and len(parts) == 2:
+            build = parts[1].strip() or None
+        elif parts[0] == "LOGIN" and len(parts) == 2 and (m := _PING_RE.search(parts[1])):
+            server = m.group(1)
+            ping = float(m.group(2))
+    return TerminalInfo(terminal=terminal_id, build=build, server=server, ping_ms=ping)
 
 
 async def control(

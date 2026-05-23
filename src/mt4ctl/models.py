@@ -104,6 +104,58 @@ class TerminalStatus:
         return self.service_state == "active" and self.connected is True
 
 
+# Bit in the MT4 chart-expert ``flags`` bitmask that corresponds to "Allow live
+# trading". Derived (not officially documented); on a healthy SQX farm every
+# trading expert reports flags=343 (odd → this bit set). Treated as best-effort.
+EXPERT_LIVE_TRADING_BIT = 0x01
+
+
+@dataclass(frozen=True, slots=True)
+class Expert:
+    """An expert advisor attached to a chart."""
+
+    name: str
+    """Expert name as stored in the .chr file (``folder\\EA name``)."""
+    flags: int
+    """MT4 chart-expert flags bitmask, or -1 if unparsable."""
+
+    @property
+    def short_name(self) -> str:
+        """The EA name without its folder prefix."""
+        return self.name.replace("\\", "/").rsplit("/", 1)[-1]
+
+    @property
+    def live_trading(self) -> bool | None:
+        """Best-effort decode of the live-trading bit; ``None`` if flags unknown."""
+        if self.flags < 0:
+            return None
+        return bool(self.flags & EXPERT_LIVE_TRADING_BIT)
+
+
+@dataclass(frozen=True, slots=True)
+class ExpertsReport:
+    """AutoTrading master switch + attached experts for one terminal."""
+
+    terminal: str
+    master: bool | None
+    """Terminal-level AutoTrading (``Experts=`` in terminal.ini); None if unknown."""
+    experts: list[Expert]
+    error: str | None = None
+    """Set when the host could not be reached, so one dead host never blanks a fan-out."""
+
+
+@dataclass(frozen=True, slots=True)
+class TerminalInfo:
+    """Build / broker / latency facts parsed from a terminal's log."""
+
+    terminal: str
+    build: str | None
+    server: str | None
+    ping_ms: float | None
+    error: str | None = None
+    """Set when the host could not be reached."""
+
+
 @dataclass(frozen=True, slots=True)
 class Registry:
     """The full set of configured hosts and terminals."""

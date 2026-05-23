@@ -214,6 +214,9 @@ and an absolute `command` path if `uvx` is not on the GUI app's `PATH` (`which u
 | `mt4_control` | ✓ | `start` / `stop` / `restart` a unit (live needs `confirm`). |
 | `mt4_login` | ✓ | One-time headless login for auto-reconnect (live needs `confirm`). |
 | `mt4_doctor` | – | Diagnose registry, SSH, remote tools, units, and data dirs. |
+| `mt4_ea_list` | – | List the experts (strategies) attached per terminal. |
+| `mt4_autotrading` | – | AutoTrading master switch + per-EA live-trading status. |
+| `mt4_info` | – | Terminal build, broker server, and last broker ping. |
 
 Full reference: [`docs/tools.md`](docs/tools.md).
 

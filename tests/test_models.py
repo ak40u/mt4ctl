@@ -5,7 +5,21 @@ from __future__ import annotations
 import pytest
 
 from mt4ctl.errors import UnknownTargetError
-from mt4ctl.models import Env, Host, HostKind, TerminalStatus
+from mt4ctl.models import Env, Expert, Host, HostKind, TerminalStatus
+
+
+def test_expert_short_name_strips_folder():
+    assert Expert(name="SQ-29-03-2026\\SQ AUDUSD H4 0.157419", flags=343).short_name == (
+        "SQ AUDUSD H4 0.157419"
+    )
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [(343, True), (342, False), (0, False), (-1, None)],
+)
+def test_expert_live_trading_decode(flags, expected):
+    assert Expert(name="x", flags=flags).live_trading is expected
 
 
 def test_wsl_host_requires_distro():

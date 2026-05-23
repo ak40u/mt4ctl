@@ -67,6 +67,93 @@ async def test_control_rejects_bad_action(registry):
         await operations.control(registry, "demo1", "frobnicate")
 
 
+async def test_experts_parses_master_and_flags(registry, monkeypatch):
+    from mt4ctl.ssh import CommandResult
+
+    out = "MASTER|1\nEA|SQ-29-03-2026\\SQ AUDUSD H4 0.157419|343\nEA|Util\\Heartbeat|342\n"
+
+    async def fake_run(host, script, **kw):
+        return CommandResult(0, out, "")
+
+    monkeypatch.setattr(ssh, "run", fake_run)
+    r = await operations.experts(registry, "demo1")
+    assert r.master is True
+    assert [e.flags for e in r.experts] == [343, 342]
+    assert r.experts[0].short_name == "SQ AUDUSD H4 0.157419"
+
+
+async def test_experts_master_off_and_unknown(registry, monkeypatch):
+    from mt4ctl.ssh import CommandResult
+
+    async def fake_run(host, script, **kw):
+        return CommandResult(0, "MASTER|0\n", "")
+
+    monkeypatch.setattr(ssh, "run", fake_run)
+    r = await operations.experts(registry, "demo1")
+    assert r.master is False and r.experts == []
+
+
+async def test_experts_unparsable_flags_and_unknown_master(registry, monkeypatch):
+    from mt4ctl.ssh import CommandResult
+
+    async def fake_run(host, script, **kw):
+        return CommandResult(0, "MASTER|?\nEA|x\\y|notanumber\n", "")
+
+    monkeypatch.setattr(ssh, "run", fake_run)
+    r = await operations.experts(registry, "demo1")
+    assert r.master is None
+    assert r.experts[0].flags == -1
+    assert r.experts[0].live_trading is None
+
+
+async def test_experts_unreachable_host_does_not_raise(registry, monkeypatch):
+    from mt4ctl.errors import RemoteCommandError
+
+    async def boom(host, script, **kw):
+        raise RemoteCommandError(host.id, 124, "command timed out")
+
+    monkeypatch.setattr(ssh, "run", boom)
+    r = await operations.experts(registry, "demo1")
+    assert r.error is not None and r.experts == [] and r.master is None
+
+
+async def test_info_nolog_and_unreachable(registry, monkeypatch):
+    from mt4ctl.errors import RemoteCommandError
+    from mt4ctl.ssh import CommandResult
+
+    async def fake_run(host, script, **kw):
+        return CommandResult(0, "INFO|nolog\n", "")
+
+    monkeypatch.setattr(ssh, "run", fake_run)
+    i = await operations.info(registry, "demo1")
+    assert i.build is None and i.server is None and i.ping_ms is None and i.error is None
+
+    async def boom(host, script, **kw):
+        raise RemoteCommandError(host.id, 127, "could not start ssh")
+
+    monkeypatch.setattr(ssh, "run", boom)
+    i2 = await operations.info(registry, "demo1")
+    assert i2.error is not None
+
+
+async def test_info_parses_build_server_ping(registry, monkeypatch):
+    from mt4ctl.ssh import CommandResult
+
+    out = (
+        "BUILD|Forex4you MT4 build 1470\n"
+        "LOGIN|login on Darwinex-Demo through primary 2 (ping: 53.40 ms)\n"
+    )
+
+    async def fake_run(host, script, **kw):
+        return CommandResult(0, out, "")
+
+    monkeypatch.setattr(ssh, "run", fake_run)
+    i = await operations.info(registry, "demo1")
+    assert i.build == "Forex4you MT4 build 1470"
+    assert i.server == "Darwinex-Demo"
+    assert i.ping_ms == 53.40
+
+
 async def test_logs_surfaces_ssh_failure(registry, monkeypatch):
     from mt4ctl.ssh import CommandResult
 

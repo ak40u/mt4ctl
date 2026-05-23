@@ -106,6 +106,43 @@ emit() {{
 """
 
 
+def build_experts_script(data_dir: str) -> str:
+    """Build a script reporting the AutoTrading master switch + attached experts.
+
+    Emits ``MASTER|<0|1|?>`` (from ``config/terminal.ini`` ``Experts=``) and one
+    ``EA|<name>|<flags>`` line per attached expert (parsed from the active
+    profile's ``.chr`` files). ``flags`` is the MT4 chart-expert bitmask.
+    """
+    dir_q = sh_quote(data_dir)
+    return f"""\
+set +e
+DIR={dir_q}
+m=$(grep -iE '^Experts=' "$DIR/config/terminal.ini" 2>/dev/null | head -1 | cut -d= -f2 | tr -d '\\r')
+[ -z "$m" ] && m="?"
+echo "MASTER{SEP}$m"
+for f in "$DIR"/profiles/default/*.chr; do
+  [ -e "$f" ] || continue
+  # .chr files are CRLF — strip the trailing CR so it doesn't ride into the name
+  # field, where it would become a stray splitlines() boundary downstream (each
+  # EA record would split apart) and dirty the parsed name.
+  awk '{{sub(/\\r$/,"")}} /<expert>/{{e=1;n=""}} e&&/^name=/{{n=substr($0,6)}} e&&/^flags=/{{print "EA{SEP}"n"{SEP}"substr($0,7); e=0}}' "$f"
+done
+"""
+
+
+def build_info_script(data_dir: str) -> str:
+    """Build a script reporting build, broker, and last login+ping from the log."""
+    dir_q = sh_quote(data_dir)
+    return f"""\
+set +e
+DIR={dir_q}
+if ! ls "$DIR"/logs/*.log >/dev/null 2>&1; then echo "INFO{SEP}nolog"; exit 0; fi
+# Scan all logs (the last login/ping may be in an earlier file than the newest).
+echo "BUILD{SEP}$(grep -ahoE '([A-Za-z0-9]+ MT[45] )?build [0-9]+' "$DIR"/logs/*.log | tail -1)"
+echo "LOGIN{SEP}$(grep -ahoE 'login on [^ ]+ through[^(]*\\(ping: [0-9.]+ ms\\)' "$DIR"/logs/*.log | tail -1)"
+"""
+
+
 def build_logs_script(data_dir: str, pattern: str | None, lines: int) -> str:
     """Build a script that returns the tail of a terminal's newest log file."""
     grep = (

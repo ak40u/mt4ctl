@@ -7,6 +7,7 @@ spawn locally.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
@@ -226,6 +227,97 @@ async def mt4_doctor() -> str:
     """
     checks = await diagnostics.run_diagnostics(registry())
     return diagnostics.format_checks(checks)
+
+
+@mcp.tool()
+@_guard
+async def mt4_ea_list(terminal: str = "all") -> str:
+    """List the expert advisors (strategies) attached to terminals.
+
+    For a single terminal, lists every attached EA; for "all", shows the count
+    per terminal. Read-only (parses the terminal's chart files).
+
+    Args:
+        terminal: a terminal id, or "all" (default).
+    """
+    reg = registry()
+    ids = list(reg.terminals) if terminal == "all" else [terminal]
+    reports = await asyncio.gather(*(operations.experts(reg, t) for t in ids))
+    if len(ids) == 1:
+        r = reports[0]
+        if r.error:
+            return f"{ids[0]}: unreachable — {r.error}"
+        names = "\n".join(f"  {e.short_name}" for e in r.experts) or "  (none)"
+        return f"{ids[0]}: {len(r.experts)} experts\n{names}"
+    return "\n".join(
+        f"{r.terminal:<12} unreachable — {r.error}"
+        if r.error
+        else f"{r.terminal:<12} {len(r.experts):>4} experts"
+        for r in reports
+    )
+
+
+@mcp.tool()
+@_guard
+async def mt4_autotrading(terminal: str = "all") -> str:
+    """Report whether algo-trading is enabled — terminal master switch + per-EA.
+
+    Shows the terminal-level AutoTrading button (from terminal.ini) and how many
+    attached experts have live-trading enabled. Flags terminals whose master is
+    off (nothing trades) or whose experts have non-uniform/disabled flags.
+
+    Note: the per-EA live-trading flag is a best-effort decode of the MT4
+    chart-expert bitmask; the terminal master switch is authoritative.
+
+    Args:
+        terminal: a terminal id, or "all" (default).
+    """
+    reg = registry()
+    ids = list(reg.terminals) if terminal == "all" else [terminal]
+    reports = await asyncio.gather(*(operations.experts(reg, t) for t in ids))
+    lines = [f"{'TERMINAL':<12} {'AUTOTRADING':<12} EXPERTS"]
+    for r in reports:
+        if r.error:
+            lines.append(f"{r.terminal:<12} {'?':<12} unreachable — {r.error}")
+            continue
+        master = {True: "on", False: "OFF", None: "?"}[r.master]
+        total = len(r.experts)
+        live = sum(e.live_trading is True for e in r.experts)
+        off = [e.short_name for e in r.experts if e.live_trading is False]
+        unknown = sum(e.live_trading is None for e in r.experts)
+        note = ""
+        if r.master is False:
+            note = "  <- master AutoTrading OFF; nothing trades"
+        elif off:
+            note = f"  <- {len(off)} EA live-trading off: {', '.join(off[:5])}"
+        elif unknown:
+            note = f"  <- {unknown} EA flags unreadable"
+        lines.append(f"{r.terminal:<12} {master:<12} {live}/{total} live{note}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+@_guard
+async def mt4_info(terminal: str = "all") -> str:
+    """Report each terminal's build, broker server, and last broker ping.
+
+    Read-only (parsed from the terminal's log). Useful to confirm what build and
+    broker a terminal is on and its connection latency.
+
+    Args:
+        terminal: a terminal id, or "all" (default).
+    """
+    reg = registry()
+    ids = list(reg.terminals) if terminal == "all" else [terminal]
+    infos = await asyncio.gather(*(operations.info(reg, t) for t in ids))
+    lines = [f"{'TERMINAL':<12} {'BUILD':<22} {'SERVER':<18} PING"]
+    for i in infos:
+        if i.error:
+            lines.append(f"{i.terminal:<12} unreachable — {i.error}")
+            continue
+        ping = "-" if i.ping_ms is None else f"{i.ping_ms:.0f}ms"
+        lines.append(f"{i.terminal:<12} {(i.build or '-'):<22} {(i.server or '-'):<18} {ping}")
+    return "\n".join(lines)
 
 
 def serve() -> None:

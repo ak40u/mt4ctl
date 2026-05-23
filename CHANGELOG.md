@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `mt4_ea_list` — inventory of experts (strategies) attached per terminal.
+- `mt4_autotrading` — terminal master AutoTrading switch (from `terminal.ini`)
+  plus per-EA live-trading status (best-effort decode of the chart-expert flags).
+- `mt4_info` — terminal build, broker server, and last broker ping (from logs).
+
 ## [0.2.0] - 2026-05-23
 
 ### Added
