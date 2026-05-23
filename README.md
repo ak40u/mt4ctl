@@ -246,6 +246,14 @@ mt4ctl serve         # run the MCP stdio server (the default with no subcommand)
   a cleanup trap `shred`s on any exit path. On POSIX, the local secrets file is
   rejected if it is readable by group/other.
 
+## Deep dive
+
+- **[The MT4 "32 terminals per Windows user" limit](docs/the-32-terminal-limit.md)** —
+  reproducing the cap on a clean box, locating the exact kernel object that enforces
+  it (a per-instance **Mutant** in the session-local `\Sessions\<id>\BaseNamedObjects`),
+  and why running headless under Wine on Linux — what `mt4ctl` drives — sidesteps it
+  entirely.
+
 ## Development
 
 ```bash
