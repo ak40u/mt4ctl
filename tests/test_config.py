@@ -87,6 +87,20 @@ def test_non_mapping_host_entry_rejected():
         parse_registry(data)
 
 
+def test_non_mapping_hosts_section_rejected():
+    with pytest.raises(ConfigError, match="hosts: expected a mapping"):
+        parse_registry({"hosts": ["bad"], "terminals": {"t": {}}})
+
+
+def test_reserved_terminal_id_all_rejected():
+    data = {
+        "hosts": {"h": {"ssh": "h"}},
+        "terminals": {"all": {"host": "h", "service": "s", "data_dir": "/d"}},
+    }
+    with pytest.raises(ConfigError, match="reserved"):
+        parse_registry(data)
+
+
 def test_invalid_host_id_rejected():
     data = {
         "hosts": {"bad id!": {"ssh": "h"}},

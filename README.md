@@ -146,8 +146,8 @@ Full reference: [`docs/tools.md`](docs/tools.md).
 - During `mt4_login` the password is embedded in the base64-framed script handed
   to `ssh`, so it is briefly visible in the local process list to your own user.
   On the remote side it is written only to a fresh `mktemp` config (mode 600) that
-  a cleanup trap `shred`s on any exit path. The secrets file is rejected if it is
-  readable by group/other.
+  a cleanup trap `shred`s on any exit path. On POSIX, the local secrets file is
+  rejected if it is readable by group/other.
 
 ## Development
 

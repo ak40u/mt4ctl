@@ -76,6 +76,10 @@ def _validate_id(kind: str, value: str) -> None:
         raise ConfigError(
             f"{kind} id {value!r} is invalid; use letters, digits, '.', '_', '-' only"
         )
+    if kind == "terminal" and value == "all":
+        raise ConfigError(
+            "terminal id 'all' is reserved (mt4_status uses it for every terminal)"
+        )
 
 
 def _clean_field(value: str, field: str, where: str) -> str:
@@ -150,6 +154,8 @@ def parse_registry(data: dict[str, Any]) -> Registry:
         raise ConfigError("registry root must be a mapping")
     raw_hosts = data.get("hosts") or {}
     raw_terminals = data.get("terminals") or {}
+    _require_mapping(raw_hosts, "hosts")
+    _require_mapping(raw_terminals, "terminals")
     if not raw_hosts:
         raise ConfigError("registry defines no hosts")
     if not raw_terminals:

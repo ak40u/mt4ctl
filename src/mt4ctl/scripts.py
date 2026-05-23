@@ -58,7 +58,8 @@ if [ -n "$BROKER" ]; then
 fi
 SS=$(ss -tnp 2>/dev/null)
 ESTABS=$(printf '%s\\n' "$SS" | awk '/ESTAB/ && $5 ~ /:443$/ {{print}}')
-PIDVIS=$(printf '%s\\n' "$SS" | grep -c 'pid=')
+CURUID=$(id -u 2>/dev/null)
+CURUSER=$(id -un 2>/dev/null)
 
 emit() {{
   id="$1"; svc="$2"; dir="$3"
@@ -79,8 +80,15 @@ emit() {{
       terminal.exe|terminal64.exe) pids="$pids $p" ;;
     esac
   done
+  # Socket ownership is visible only to root or the unit's own user; otherwise
+  # report unknown (-1) rather than a false 'down'.
+  svcuser=$(systemctl show -p User --value "$svc" 2>/dev/null)
+  attrib=0
+  if [ "$CURUID" = 0 ]; then attrib=1
+  elif [ -n "$svcuser" ] && [ "$svcuser" = "$CURUSER" ]; then attrib=1
+  fi
   estab=-1
-  if [ "$BROKER_FAIL" = 0 ] && [ "${{PIDVIS:-0}}" -gt 0 ] && [ -n "$pids" ]; then
+  if [ "$BROKER_FAIL" = 0 ] && [ "$attrib" = 1 ] && [ -n "$pids" ]; then
     estab=0
     while IFS= read -r ln; do
       [ -z "$ln" ] && continue
@@ -153,6 +161,7 @@ fi
 """
     return f"""\
 set +e
+umask 077
 export DISPLAY={sh_quote(display)}
 {activate}import -window root {out} 2>/dev/null || scrot -o {out} 2>/dev/null
 test -s {out} && echo "OK {out}" || echo "FAIL"

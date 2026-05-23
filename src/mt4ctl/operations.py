@@ -150,8 +150,11 @@ async def screenshot(
     result = await ssh.run(host, script, timeout=45.0, check=False)
     if "OK " not in result.stdout:
         raise RemoteCommandError(host.id, 1, "screenshot capture produced no image")
-    data = await ssh.fetch_bytes(host, remote_tmp)
-    await ssh.run(host, f"rm -f {scripts.sh_quote(remote_tmp)}", check=False)
+    try:
+        data = await ssh.fetch_bytes(host, remote_tmp)
+    finally:
+        # Always remove the remote image, even if the fetch failed mid-way.
+        await ssh.run(host, f"rm -f {scripts.sh_quote(remote_tmp)}", check=False)
 
     out_dir = out_dir or Path.home() / ".cache" / "mt4ctl"
     out_dir.mkdir(parents=True, exist_ok=True)

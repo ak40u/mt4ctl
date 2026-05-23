@@ -153,18 +153,19 @@ async def login(
     except RemoteCommandError:
         restarted = False
 
-    if "LOGIN|ok=1" not in result.stdout:
-        return (
-            f"{terminal_id}: login did not confirm within {wait_seconds}s "
-            f"(account {login_account} on {server}). Check `mt4_logs` and verify the "
+    if "LOGIN|ok=1" in result.stdout:
+        msg = (
+            f"{terminal_id}: logged in to account {login_account} on {server}; "
+            f"credentials saved."
+        )
+    else:
+        msg = (
+            f"{terminal_id}: login did NOT confirm within {wait_seconds}s "
+            f"(account {login_account} on {server}); check `mt4_logs` and verify the "
             f"server name and password."
         )
-    if not restarted:
-        return (
-            f"{terminal_id}: logged in to account {login_account} on {server} and saved "
-            f"credentials, but restarting the unit failed — run `mt4_control` start."
-        )
-    return (
-        f"{terminal_id}: logged in to account {login_account} on {server}; "
-        f"credentials saved, unit restarted for auto-reconnect."
-    )
+    # The restart outcome is reported on every path so a stopped unit is never
+    # hidden behind a login message.
+    if restarted:
+        return msg + " Unit restarted for auto-reconnect."
+    return msg + " WARNING: restarting the unit failed — run `mt4_control` start."

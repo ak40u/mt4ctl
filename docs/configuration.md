@@ -84,6 +84,7 @@ connect as root. When `ss` cannot expose process metadata, or when a configured
 guessing.
 
 `mt4_login` also runs its one-shot under the **SSH account**, reusing the unit's
-`WorkingDirectory`, `WINEPREFIX`, and `DISPLAY`. Use it on units whose `User=`
-matches your SSH user (the common single-user farm setup); for units that run as
-a different user, log in via that user's session instead.
+`WorkingDirectory`, `WINEPREFIX`, and `DISPLAY` (read from the unit's inline
+`Environment=`; `EnvironmentFile=` is not resolved). Use it on units whose
+`User=` matches your SSH user (the common single-user farm setup); for units that
+run as a different user, log in via that user's session instead.

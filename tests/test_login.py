@@ -70,6 +70,43 @@ async def test_login_live_requires_confirm(registry, monkeypatch):
         await login_mod.login(registry, "live-main", server="Broker", confirm=False)
 
 
+def _fake_ssh(login_line: str, *, start_fails: bool):
+    from mt4ctl.errors import RemoteCommandError
+    from mt4ctl.ssh import CommandResult
+
+    async def fake_run(host, script, **kw):
+        if "systemctl start" in script:
+            if start_fails:
+                raise RemoteCommandError("h", 1, "start failed")
+            return CommandResult(0, "STATE|active|rc=0", "")
+        if "systemctl stop" in script:
+            return CommandResult(0, "STATE|inactive|rc=0", "")
+        return CommandResult(0, login_line, "")  # the bootstrap script
+
+    return fake_run
+
+
+async def test_login_reports_restart_failure_even_when_login_failed(registry, monkeypatch):
+    monkeypatch.setattr(ssh, "run", _fake_ssh("LOGIN|ok=0", start_fails=True))
+    msg = await login_mod.login(registry, "demo1", server="B", password="x")
+    assert "did NOT confirm" in msg
+    assert "restarting the unit failed" in msg  # not hidden
+
+
+async def test_login_success_with_restart(registry, monkeypatch):
+    monkeypatch.setattr(ssh, "run", _fake_ssh("LOGIN|ok=1", start_fails=False))
+    msg = await login_mod.login(registry, "demo1", server="B", password="x")
+    assert "logged in" in msg
+    assert "restarted for auto-reconnect" in msg
+
+
+async def test_login_success_but_restart_failed(registry, monkeypatch):
+    monkeypatch.setattr(ssh, "run", _fake_ssh("LOGIN|ok=1", start_fails=True))
+    msg = await login_mod.login(registry, "demo1", server="B", password="x")
+    assert "logged in" in msg
+    assert "restarting the unit failed" in msg
+
+
 async def test_login_requires_an_account():
     # A terminal with no account in the registry, and none passed -> rejected
     # before any SSH call is made.

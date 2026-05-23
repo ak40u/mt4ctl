@@ -49,7 +49,9 @@ def test_status_script_handles_broker_failure_and_visibility():
     out = scripts.build_status_script("broker.example.com", [("d", "s", "/d")])
     assert "BROKER_FAIL" in out
     assert "getent ahosts" in out  # IPv4 + IPv6
-    assert "PIDVIS" in out
+    # attribution is gated on root or matching service user, else unknown (-1)
+    assert "attrib=1" in out
+    assert "svcuser=$(systemctl show -p User" in out
 
 
 def test_control_script_rejects_bad_action():
