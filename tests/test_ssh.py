@@ -96,7 +96,9 @@ def test_put_argv_reserves_stdin_via_process_substitution():
     # the extraction script (base64) carries the hardened tar flag + dest
     script = _payload(argv)
     assert "tar --no-same-owner -x -C " in script
-    assert "--no-absolute-names" not in script  # not a GNU tar option; default guards traversal
+    assert (
+        "--no-absolute-names" not in script
+    )  # not a GNU tar option; default guards traversal
     assert "mkdir -p " in script
 
 

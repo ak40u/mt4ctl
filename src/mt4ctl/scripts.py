@@ -38,9 +38,9 @@ LOCKDIR = f"{MT4CTL_DIR}/deploy.lock.d"
 # scripts that hash remote files (state read + apply verification).
 _SHA_FUNC = (
     "sha() { "
-    'if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk \'{print $1}\'; '
-    'elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk \'{print $1}\'; '
-    'else openssl dgst -sha256 "$1" | awk \'{print $NF}\'; fi; }'
+    "if command -v sha256sum >/dev/null 2>&1; then sha256sum \"$1\" | awk '{print $1}'; "
+    "elif command -v shasum >/dev/null 2>&1; then shasum -a 256 \"$1\" | awk '{print $1}'; "
+    "else openssl dgst -sha256 \"$1\" | awk '{print $NF}'; fi; }"
 )
 
 
@@ -419,9 +419,7 @@ def build_apply_script(
     # chown every write + the private dir to the unit user so MT4 (running as that
     # user) can persist `.chr`/`deployed.json` on exit. Best-effort: a no-op when
     # apply already runs as that user, and skipped entirely for a root unit.
-    chown_targets = " ".join(
-        sh_quote(p) for p in [*place.keys(), MANIFEST_REL, MT4CTL_DIR]
-    )
+    chown_targets = " ".join(sh_quote(p) for p in [*place.keys(), MANIFEST_REL, MT4CTL_DIR])
     return f"""\
 set -e
 {_SHA_FUNC}

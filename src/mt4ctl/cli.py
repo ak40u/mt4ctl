@@ -169,13 +169,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("path", nargs="?", help="where to write (default: XDG config path)")
     p_deploy = sub.add_parser("deploy", help="deploy a strategy bundle to a terminal")
     p_deploy.add_argument("terminal", help="terminal id")
-    p_deploy.add_argument("bundle", help="local bundle directory (profiles/default + MQL4/Experts)")
-    p_deploy.add_argument("--dry-run", action="store_true", help="preview the plan; change nothing")
-    p_deploy.add_argument("--confirm", action="store_true", help="required for env=live terminals")
-    p_adopt = sub.add_parser("adopt", help="record an already-running bundle as managed (cutover)")
+    p_deploy.add_argument(
+        "bundle", help="local bundle directory (profiles/default + MQL4/Experts)"
+    )
+    p_deploy.add_argument(
+        "--dry-run", action="store_true", help="preview the plan; change nothing"
+    )
+    p_deploy.add_argument(
+        "--confirm", action="store_true", help="required for env=live terminals"
+    )
+    p_adopt = sub.add_parser(
+        "adopt", help="record an already-running bundle as managed (cutover)"
+    )
     p_adopt.add_argument("terminal", help="terminal id")
     p_adopt.add_argument("bundle", help="local bundle directory the terminal already runs")
-    p_adopt.add_argument("--confirm", action="store_true", help="required for env=live terminals")
+    p_adopt.add_argument(
+        "--confirm", action="store_true", help="required for env=live terminals"
+    )
     return parser
 
 

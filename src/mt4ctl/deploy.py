@@ -253,7 +253,9 @@ def compute_plan(
             elif actual == want:
                 unchanged.append(path)
                 if managed.get(path) != actual:
-                    notes.append(f"drift: manifest hash for {path} stale; on-disk already matches")
+                    notes.append(
+                        f"drift: manifest hash for {path} stale; on-disk already matches"
+                    )
             else:
                 update.append(path)
                 if managed.get(path) != actual:

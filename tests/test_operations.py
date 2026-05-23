@@ -193,8 +193,20 @@ def _manifest_b64(files: dict[str, str]) -> str:
 class FakeSSH:
     """Records the order of remote calls and serves canned, per-step output."""
 
-    def __init__(self, term_id, *, manifest="MISSING", dest=None, charts=None, user="trader",
-                 drain="ok", apply="ok", service="active", connected="2", log_text=""):
+    def __init__(
+        self,
+        term_id,
+        *,
+        manifest="MISSING",
+        dest=None,
+        charts=None,
+        user="trader",
+        drain="ok",
+        apply="ok",
+        service="active",
+        connected="2",
+        log_text="",
+    ):
         self.term_id = term_id
         self.manifest = manifest
         self.dest = dest or {}
@@ -326,8 +338,14 @@ async def test_deploy_happy_path_call_order(registry, monkeypatch, tmp_path):
     # lock BEFORE state read; backup before upload; start before release
     assert _order(
         fake.calls,
-        "lock_acquire", "remote_state", "stop", "drain", "backup", "apply",
-        "start", "lock_release",
+        "lock_acquire",
+        "remote_state",
+        "stop",
+        "drain",
+        "backup",
+        "apply",
+        "start",
+        "lock_release",
     )
     assert fake.put_calls and ".mt4ctl/staging/" in fake.put_calls[0]
     # put_tar happens between backup and apply
@@ -376,7 +394,9 @@ async def test_deploy_pre_stop_failure_does_not_start(registry, monkeypatch, tmp
     # an unmanaged-collision is detected pre-stop -> refuse before any mutation
     bundle = _make_bundle(tmp_path)
     files, _ = operations.deploy_core.read_bundle(bundle)
-    fake = FakeSSH("demo1", manifest="MISSING", dest=dict.fromkeys(files, "abc123"))  # present, unmanaged
+    fake = FakeSSH(
+        "demo1", manifest="MISSING", dest=dict.fromkeys(files, "abc123")
+    )  # present, unmanaged
     _install(monkeypatch, fake)
     with pytest.raises(DeployError, match="does not manage"):
         await operations.deploy(registry, "demo1", bundle)
@@ -389,7 +409,9 @@ async def test_deploy_confirm_forwarded_to_control_on_live(registry, monkeypatch
     fake = FakeSSH("live-main", log_text="Experts\tStrat: loaded\n")
     _install(monkeypatch, fake)
     # confirm=True must reach control's stop/start so the live-gate is not re-tripped
-    result = await operations.deploy(registry, "live-main", _make_bundle(tmp_path), confirm=True)
+    result = await operations.deploy(
+        registry, "live-main", _make_bundle(tmp_path), confirm=True
+    )
     assert "stop" in fake.calls and "start" in fake.calls
     assert result.restarted is True
 
@@ -401,8 +423,12 @@ async def test_deploy_recompute_after_drain_reclassifies_chr(registry, monkeypat
     # First state read: manifest matches bundle for the .chr (would be "unchanged");
     # the post-drain re-read returns a DIFFERENT .chr hash (MT4 rewrote it on exit).
     seq = {"n": 0}
-    fake = FakeSSH("demo1", manifest=_manifest_b64(files), dest=dict(files),
-                   log_text="Experts\tStrat: loaded\n")
+    fake = FakeSSH(
+        "demo1",
+        manifest=_manifest_b64(files),
+        dest=dict(files),
+        log_text="Experts\tStrat: loaded\n",
+    )
     orig = fake._remote_state_out
 
     def staged_state():
@@ -412,10 +438,13 @@ async def test_deploy_recompute_after_drain_reclassifies_chr(registry, monkeypat
         # post-drain: the chart's on-disk hash changed
         d = dict(files)
         d[chr_rel] = "rewritten_by_mt4_on_exit"
-        return "\n".join(
-            ["USER|trader", f"MANIFEST|{_manifest_b64(files)}"]
-            + [f"DEST|{r}|1|{h}" for r, h in d.items()]
-        ) + "\n"
+        return (
+            "\n".join(
+                ["USER|trader", f"MANIFEST|{_manifest_b64(files)}"]
+                + [f"DEST|{r}|1|{h}" for r, h in d.items()]
+            )
+            + "\n"
+        )
 
     fake._remote_state_out = staged_state
     _install(monkeypatch, fake)
@@ -448,7 +477,9 @@ async def test_deploy_apply_runs_as_unit_user(registry, monkeypatch, tmp_path):
     assert fake.apply_scripts and "U='pavel'" in fake.apply_scripts[0]
 
 
-async def test_deploy_verify_inconclusive_connection_not_failed(registry, monkeypatch, tmp_path):
+async def test_deploy_verify_inconclusive_connection_not_failed(
+    registry, monkeypatch, tmp_path
+):
     # connected unknown (-1) must not flip verify to False on its own
     fake = FakeSSH("demo1", connected="-1", log_text="Experts\tStrat: loaded\n")
     _install(monkeypatch, fake)
@@ -526,7 +557,9 @@ async def test_adopt_releases_lock_when_state_read_raises(registry, monkeypatch,
     assert "lock_release" in calls  # finally released the lock despite the raise
 
 
-async def test_adopt_reports_drift_for_present_but_differing_file(registry, monkeypatch, tmp_path):
+async def test_adopt_reports_drift_for_present_but_differing_file(
+    registry, monkeypatch, tmp_path
+):
     bundle = _make_bundle(tmp_path)
     files, _ = operations.deploy_core.read_bundle(bundle)
     on_host = dict(files)

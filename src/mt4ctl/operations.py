@@ -274,7 +274,9 @@ def _parse_remote_state(stdout: str) -> tuple[deploy_core.RemoteState, str]:
         elif tag == "MANIFEST" and len(parts) >= 2:
             token = parts[1].strip()
             manifest_raw = (
-                None if token == "MISSING" else base64.b64decode(token).decode("utf-8", "replace")
+                None
+                if token == "MISSING"
+                else base64.b64decode(token).decode("utf-8", "replace")
             )
         elif tag == "CHART" and len(parts) >= 2:
             rel = parts[1]
@@ -322,7 +324,9 @@ async def _deploy_preflight(host: Host, data_dir: str) -> None:
     problems = [
         f"{p[1]}={p[2]}"
         for line in result.stdout.splitlines()
-        if (p := line.split(scripts.SEP))[0] == "PRE" and len(p) >= 3 and p[2].split()[0] != "ok"
+        if (p := line.split(scripts.SEP))[0] == "PRE"
+        and len(p) >= 3
+        and p[2].split()[0] != "ok"
     ]
     if problems:
         raise DeployError(
@@ -473,7 +477,9 @@ async def deploy(
 
     holder = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
     lock = await ssh.run(
-        host, scripts.build_lock_acquire_script(term.data_dir, holder, _LOCK_STALE_S), check=False
+        host,
+        scripts.build_lock_acquire_script(term.data_dir, holder, _LOCK_STALE_S),
+        check=False,
     )
     if not any(f"LOCK{scripts.SEP}{w}" in lock.stdout for w in ("acquired", "takeover")):
         raise DeployError(
@@ -538,7 +544,9 @@ async def deploy(
                 touched = sorted({*plan.add, *plan.update, *plan.remove})
                 await ssh.run(
                     host,
-                    scripts.build_restore_script(term.data_dir, backup_path, touched, unit_user),
+                    scripts.build_restore_script(
+                        term.data_dir, backup_path, touched, unit_user
+                    ),
                     check=False,
                 )
     finally:
@@ -614,7 +622,9 @@ async def adopt(
 
     holder = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
     lock = await ssh.run(
-        host, scripts.build_lock_acquire_script(term.data_dir, holder, _LOCK_STALE_S), check=False
+        host,
+        scripts.build_lock_acquire_script(term.data_dir, holder, _LOCK_STALE_S),
+        check=False,
     )
     if not any(f"LOCK{scripts.SEP}{w}" in lock.stdout for w in ("acquired", "takeover")):
         raise DeployError(

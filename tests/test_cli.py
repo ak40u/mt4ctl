@@ -109,11 +109,18 @@ def test_deploy_parses_args_and_calls_operation(monkeypatch, tmp_path, capsys):
         )
 
     monkeypatch.setattr(operations, "deploy", fake_deploy)
-    monkeypatch.setattr("sys.argv", ["mt4ctl", "deploy", "t1", "/path/bundle", "--dry-run", "--confirm"])
+    monkeypatch.setattr(
+        "sys.argv", ["mt4ctl", "deploy", "t1", "/path/bundle", "--dry-run", "--confirm"]
+    )
     with pytest.raises(SystemExit) as exc:
         cli.main()
     assert exc.value.code == 0
-    assert captured == {"terminal": "t1", "bundle": "/path/bundle", "dry_run": True, "confirm": True}
+    assert captured == {
+        "terminal": "t1",
+        "bundle": "/path/bundle",
+        "dry_run": True,
+        "confirm": True,
+    }
     assert "plan: +1" in capsys.readouterr().out
 
 
@@ -180,7 +187,9 @@ def test_adopt_reports_error_with_exit_1(monkeypatch, tmp_path, capsys):
     from mt4ctl.errors import DeployError
 
     async def boom(registry, terminal, bundle, *, confirm):
-        raise DeployError("adopt requires every bundle file present on the host; absent: x.ex4")
+        raise DeployError(
+            "adopt requires every bundle file present on the host; absent: x.ex4"
+        )
 
     monkeypatch.setattr(operations, "adopt", boom)
     monkeypatch.setattr("sys.argv", ["mt4ctl", "adopt", "t1", "/b"])

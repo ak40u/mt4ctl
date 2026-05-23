@@ -121,7 +121,9 @@ def _fmt_deploy_plan(plan: DeployPlan) -> str:
         lines.append(f"foreign — left untouched ({len(plan.foreign)}):")
         lines.extend(f"  {p}" for p in plan.foreign)
     if plan.conflicts:
-        lines.append(f"REFUSED — would overwrite files mt4ctl does not manage ({len(plan.conflicts)}):")
+        lines.append(
+            f"REFUSED — would overwrite files mt4ctl does not manage ({len(plan.conflicts)}):"
+        )
         lines.extend(f"  {p}" for p in plan.conflicts)
         lines.append("  next: remove/rename them on the host, or drop them from the bundle")
     if plan.notes:
@@ -147,9 +149,13 @@ def _fmt_deploy_result(result: DeployResult) -> str:
     if result.backup_path:
         lines.append(f"backup: {result.backup_path}")
     lines.append(
-        "restarted: yes" if result.restarted else "restarted: NO — run `mt4_control <id> start`"
+        "restarted: yes"
+        if result.restarted
+        else "restarted: NO — run `mt4_control <id> start`"
     )
-    lines.append(f"verify: {'ok' if result.verify_ok else 'NOT confirmed'} ({result.verify_detail})")
+    lines.append(
+        f"verify: {'ok' if result.verify_ok else 'NOT confirmed'} ({result.verify_detail})"
+    )
     if not result.verify_ok:
         lines.append(
             "  note: verify is report-only and did NOT revert the deploy; "
@@ -457,7 +463,9 @@ async def mt4_adopt(terminal: str, bundle: str, confirm: bool = False) -> str:
         bundle: local bundle directory path.
         confirm: must be true to adopt a terminal tagged env=live.
     """
-    return _fmt_adopt_result(await operations.adopt(registry(), terminal, bundle, confirm=confirm))
+    return _fmt_adopt_result(
+        await operations.adopt(registry(), terminal, bundle, confirm=confirm)
+    )
 
 
 def serve() -> None:

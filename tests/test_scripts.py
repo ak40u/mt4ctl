@@ -130,8 +130,8 @@ def test_remote_state_emits_user_manifest_charts_and_dest_stats():
     out = scripts.build_remote_state_script(
         "/home/t/d", ["MQL4/Experts/A.ex4", "profiles/default/a.chr"], "mt4-x"
     )
-    assert "systemctl show -p User --value \"$UNIT\"" in out
-    assert "[ -z \"$U\" ] && U=root" in out  # empty User= -> root
+    assert 'systemctl show -p User --value "$UNIT"' in out
+    assert '[ -z "$U" ] && U=root' in out  # empty User= -> root
     assert "UNIT='mt4-x'" in out
     assert f"$DIR/{scripts.MANIFEST_REL}" in out
     assert "MANIFEST|MISSING" in out
@@ -159,7 +159,7 @@ def test_drain_polls_cgroup_and_fails_on_persisting_proc():
 
 def test_backup_includes_manifest_and_prunes_to_three():
     out = scripts.build_backup_script("/home/t/d", ["MQL4/Experts/A.ex4"], "20260523-0000")
-    assert "-T \"$LIST\"" in out  # tar from the gathered file list
+    assert '-T "$LIST"' in out  # tar from the gathered file list
     assert scripts.MANIFEST_REL in out  # manifest tarred alongside managed files
     assert "TS='20260523-0000'" in out and '"$BK/$TS.tar"' in out
     assert "tail -n +4" in out  # keep newest 3
@@ -183,7 +183,7 @@ def test_apply_verifies_staged_hashes_before_move_and_writes_manifest_last():
     )
     # staged-hash verification appears, and its abort precedes any mv in the text
     assert "APPLY|hashfail" in out
-    assert '[ "$got" = \'deadbeef\' ]' in out
+    assert "[ \"$got\" = 'deadbeef' ]" in out
     hashfail_at = out.index("APPLY|hashfail")
     first_mv = out.index("mv -f")
     assert hashfail_at < first_mv  # verify-before-move
@@ -192,7 +192,7 @@ def test_apply_verifies_staged_hashes_before_move_and_writes_manifest_last():
     assert "rm -f \"$DIR/\"'MQL4/Experts/Old.ex4'" in out
     assert 'mv -f "$TMP" "$DIR/' + scripts.MANIFEST_REL in out
     # chown to the unit user (so MT4 can rewrite on exit)
-    assert "chown -R \"$U\"" in out
+    assert 'chown -R "$U"' in out
     assert "U='trader'" in out
 
 
@@ -206,9 +206,7 @@ def test_apply_quotes_filenames_with_shell_metacharacters():
     import subprocess
 
     evil = 'MQL4/Experts/a";id #.ex4'
-    out = scripts.build_apply_script(
-        "/home/t/d", "stg", {evil: "h"}, [evil], [evil], "trader"
-    )
+    out = scripts.build_apply_script("/home/t/d", "stg", {evil: "h"}, [evil], [evil], "trader")
     assert 'echo "APPLY|hashfail|$f"' in out  # message uses a quoted var, never raw rel
     # every occurrence of the name is single-quoted (sh_quote or json+sh_quote);
     # a clean `bash -n` parse proves no metacharacter escapes its quoting.
@@ -237,7 +235,9 @@ def test_manifest_put_skips_chown_for_root_unit():
 def test_manifest_put_is_valid_bash():
     import subprocess
 
-    out = scripts.build_manifest_put_script("/home/t/d", '{"version":1,"files":{"a":"h"}}', "trader")
+    out = scripts.build_manifest_put_script(
+        "/home/t/d", '{"version":1,"files":{"a":"h"}}', "trader"
+    )
     assert subprocess.run(["bash", "-n"], input=out.encode()).returncode == 0
 
 
@@ -254,7 +254,7 @@ def test_lock_acquire_is_atomic_mkdir_with_stale_takeover():
 
 def test_lock_release_only_when_owner_matches():
     out = scripts.build_lock_release_script("/home/t/d", "host:1234")
-    assert 'owner=$(awk' in out
+    assert "owner=$(awk" in out
     assert '[ "$owner" = "$H" ]' in out
     assert "LOCK|released" in out
     assert "LOCK|notowner" in out
@@ -265,7 +265,7 @@ def test_restore_purges_touched_then_extracts_backup():
         "/home/t/d", "/home/t/d/.mt4ctl/backups/ts.tar", ["MQL4/Experts/New.ex4"], "trader"
     )
     rm_at = out.index("rm -f \"$DIR/\"'MQL4/Experts/New.ex4'")
-    tar_at = out.index("tar -C \"$DIR\" -xf")
+    tar_at = out.index('tar -C "$DIR" -xf')
     assert rm_at < tar_at  # purge touched paths BEFORE re-extracting backup
     assert "--no-same-owner" in out and "--no-absolute-names" not in out
     assert "RESTORE|done" in out

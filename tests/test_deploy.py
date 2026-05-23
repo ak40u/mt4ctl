@@ -13,7 +13,9 @@ from mt4ctl.errors import BundleError, DeployError
 
 # A minimal valid .chr referencing one expert, CRLF like a real MT4 file.
 def _chr(ea_name: str) -> str:
-    return "\r\n".join(["<chart>", "<expert>", f"name={ea_name}", "flags=343", "</expert>", ""])
+    return "\r\n".join(
+        ["<chart>", "<expert>", f"name={ea_name}", "flags=343", "</expert>", ""]
+    )
 
 
 def _make_bundle(tmp_path: Path, charts: dict[str, str], ex4s: list[str]) -> Path:
@@ -47,7 +49,10 @@ def test_read_bundle_hashes_files_and_maps_charts(tmp_path):
         "MQL4/Experts/Old/SQ EURUSD.ex4",
     }
     assert all(len(h) == 64 for h in files.values())  # sha256 hex
-    assert chart_to_ex4["profiles/default/AUDUSD.chr"] == "MQL4/Experts/SQ-29-03-2026/SQ AUDUSD.ex4"
+    assert (
+        chart_to_ex4["profiles/default/AUDUSD.chr"]
+        == "MQL4/Experts/SQ-29-03-2026/SQ AUDUSD.ex4"
+    )
     assert chart_to_ex4["profiles/default/EURUSD.chr"] == "MQL4/Experts/Old/SQ EURUSD.ex4"
 
 
@@ -161,7 +166,9 @@ def test_compute_plan_add_update_unchanged_remove():
 
 def test_compute_plan_empty_when_identical():
     files = {"MQL4/Experts/A.ex4": "h"}
-    state = RemoteState(deployed={"MQL4/Experts/A.ex4": "h"}, remote_hashes={"MQL4/Experts/A.ex4": "h"})
+    state = RemoteState(
+        deployed={"MQL4/Experts/A.ex4": "h"}, remote_hashes={"MQL4/Experts/A.ex4": "h"}
+    )
     plan = compute_plan(files, {}, state)
     assert plan.has_changes is False
     assert plan.unchanged == ("MQL4/Experts/A.ex4",)

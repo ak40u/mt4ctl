@@ -158,7 +158,9 @@ def build_put_argv(host: Host, dest_dir: str) -> list[str]:
     return ["ssh", *SSH_BASE_OPTS, host.ssh, remote]
 
 
-async def put_tar(host: Host, tar_bytes: bytes, dest_dir: str, *, timeout: float = 120.0) -> None:
+async def put_tar(
+    host: Host, tar_bytes: bytes, dest_dir: str, *, timeout: float = 120.0
+) -> None:
     """Upload *tar_bytes* and extract it into *dest_dir* on *host* (created if absent).
 
     The raw tar is streamed to the remote ``tar -x`` over stdin (see
