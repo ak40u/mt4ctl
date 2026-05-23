@@ -24,6 +24,7 @@ from . import deploy as deploy_core
 from . import scripts, ssh
 from .errors import ConfirmationRequiredError, DeployError, RemoteCommandError
 from .models import (
+    AdoptResult,
     DeployPlan,
     DeployResult,
     Env,
@@ -584,3 +585,74 @@ async def deploy(
 
 def _timestamp() -> str:
     return time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+
+
+async def adopt(
+    registry: Registry,
+    terminal_id: str,
+    bundle_dir: str | Path,
+    *,
+    confirm: bool = False,
+) -> AdoptResult:
+    """Take an already-running terminal under management (brownfield first cutover).
+
+    Records the bundle's footprint into ``deployed.json`` at the files' current
+    on-disk hashes, so a subsequent :func:`deploy` reconciles from that baseline.
+    This is records-only: no strategy file is touched, the unit is never stopped or
+    restarted. Bundle-scoped — only the bundle's own paths are recorded, so foreign
+    files (e.g. a watchdog's chart) stay foreign. Every bundle file must already be
+    present on the host (the premise is that the farm runs this bundle); a missing
+    file raises :class:`DeployError`. A live terminal requires ``confirm=True``.
+    """
+    term = registry.terminal(terminal_id)
+    host = registry.host_of(term)
+    if term.env is Env.LIVE and not confirm:
+        raise ConfirmationRequiredError(terminal_id, "adopt")
+
+    files, _chart_to_ex4 = deploy_core.read_bundle(bundle_dir)
+    dest_paths = sorted(files)
+
+    holder = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+    lock = await ssh.run(
+        host, scripts.build_lock_acquire_script(term.data_dir, holder, _LOCK_STALE_S), check=False
+    )
+    if not any(f"LOCK{scripts.SEP}{w}" in lock.stdout for w in ("acquired", "takeover")):
+        raise DeployError(
+            f"another deploy/adopt holds the lock on {terminal_id!r}; retry once it finishes"
+        )
+    try:
+        state, unit_user = await _read_remote_state(host, term, dest_paths)
+        # Present-but-unhashable counts as not-adoptable: you cannot record a
+        # footprint you could not hash (keeps the manifest from ever holding an
+        # empty/forged hash, and the indexing below total).
+        absent = [
+            rel
+            for rel in dest_paths
+            if not state.dest_stats.get(rel, False) or not state.remote_hashes.get(rel)
+        ]
+        if absent:
+            raise DeployError(
+                "adopt requires every bundle file present and readable on the host (the "
+                f"farm is not running this bundle); missing: {', '.join(absent)}"
+            )
+        manifest_files = {rel: state.remote_hashes[rel] for rel in dest_paths}
+        drifted = tuple(rel for rel in dest_paths if state.remote_hashes[rel] != files[rel])
+        await ssh.run(
+            host,
+            scripts.build_manifest_put_script(
+                term.data_dir, deploy_core.build_manifest(manifest_files), unit_user
+            ),
+            check=True,
+        )
+    finally:
+        await ssh.run(
+            host, scripts.build_lock_release_script(term.data_dir, holder), check=False
+        )
+
+    return AdoptResult(
+        terminal=term.id,
+        adopted=tuple(dest_paths),
+        drifted=drifted,
+        unit_user=unit_user,
+        manifest_path=f"{term.data_dir}/{scripts.MANIFEST_REL}",
+    )

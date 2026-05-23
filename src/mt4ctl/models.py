@@ -201,6 +201,24 @@ class DeployResult:
 
 
 @dataclass(frozen=True, slots=True)
+class AdoptResult:
+    """Outcome of taking an already-running terminal under management.
+
+    adopt records the bundle's footprint into ``deployed.json`` at the files'
+    current on-disk hashes — no strategy file is touched and the unit is never
+    restarted. ``drifted`` lists adopted files whose on-disk content differs from
+    the bundle (a later deploy would update them). ``unit_user`` is surfaced so a
+    misresolved owner (e.g. ``root``) is visible to the operator.
+    """
+
+    terminal: str
+    adopted: tuple[str, ...]
+    drifted: tuple[str, ...]
+    unit_user: str
+    manifest_path: str
+
+
+@dataclass(frozen=True, slots=True)
 class Registry:
     """The full set of configured hosts and terminals."""
 

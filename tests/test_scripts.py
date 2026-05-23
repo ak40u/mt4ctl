@@ -215,6 +215,32 @@ def test_apply_quotes_filenames_with_shell_metacharacters():
     assert subprocess.run(["bash", "-n"], input=out.encode()).returncode == 0
 
 
+def test_manifest_put_ships_blob_base64_and_writes_atomically():
+    import base64
+
+    out = scripts.build_manifest_put_script("/home/t/d", '{"version":1,"files":{}}', "trader")
+    assert "base64 -d" in out
+    assert base64.b64encode(b'{"version":1,"files":{}}').decode() in out  # blob shipped b64
+    assert '{"version":1' not in out  # raw JSON never crosses the wire unencoded
+    assert 'mv -f "$TMP" "$DIR/' + scripts.MANIFEST_REL in out  # atomic write
+    assert "ADOPT|ok" in out
+    assert "U='trader'" in out
+    assert 'chown "$U"' in out
+    assert "systemctl" not in out  # never stops/starts; records-only
+
+
+def test_manifest_put_skips_chown_for_root_unit():
+    out = scripts.build_manifest_put_script("/d", "{}", "root")
+    assert '[ "$U" != root ]' in out  # don't chown to root
+
+
+def test_manifest_put_is_valid_bash():
+    import subprocess
+
+    out = scripts.build_manifest_put_script("/home/t/d", '{"version":1,"files":{"a":"h"}}', "trader")
+    assert subprocess.run(["bash", "-n"], input=out.encode()).returncode == 0
+
+
 def test_lock_acquire_is_atomic_mkdir_with_stale_takeover():
     out = scripts.build_lock_acquire_script("/home/t/d", "host:1234", 600)
     assert 'mkdir "$LD"' in out  # atomic mkdir lock

@@ -206,6 +206,20 @@ def parse_manifest(raw: str | None) -> dict[str, str] | None:
     return manifest_files
 
 
+def build_manifest(files: dict[str, str]) -> str:
+    """Serialize a managed-file map to the canonical ``deployed.json`` payload.
+
+    The exact inverse of :func:`parse_manifest` (``{"version": …, "files": …}``),
+    with sorted keys for deterministic output. This is the Python-side writer used
+    by ``adopt``; the deploy apply path builds the same shape on the remote from
+    post-move on-disk hashes, and a parity test keeps the two in lock-step.
+    """
+    return json.dumps(
+        {"version": MANIFEST_VERSION, "files": dict(sorted(files.items()))},
+        separators=(",", ":"),
+    )
+
+
 def compute_plan(
     files: dict[str, str],
     chart_to_ex4: dict[str, str],

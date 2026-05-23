@@ -46,6 +46,33 @@ The on-disk hashes are authoritative over the manifest: if a managed file was
 changed out from under mt4ctl (drift), the bundle version wins and the drift is
 reported.
 
+## Adopting an existing farm (first cutover)
+
+On a terminal whose strategies were **not** placed by mt4ctl there is no manifest,
+so the very first `mt4_deploy` refuses every existing file as an unmanaged
+overwrite. To take that farm under management, run **`mt4_adopt`** once first:
+
+```bash
+mt4ctl adopt demo3 ./current-bundle     # record what the terminal already runs
+mt4ctl deploy demo3 ./current-bundle --dry-run   # should now report "no changes"
+mt4ctl deploy demo3 ./next-bundle               # reconcile forward from here on
+```
+
+`adopt` records the bundle's footprint into `deployed.json` at the files' **current
+on-disk hashes** — it is *records-only*: no strategy file is touched, the unit is
+never stopped or restarted. It is **bundle-scoped**: only the bundle's own paths
+are recorded, so foreign files (a watchdog's chart) stay foreign and are never
+adopted. Every bundle file must already be present on the host — the premise is
+that the farm runs this bundle; a missing file is refused (no partial manifest).
+A self-contained bundle is required (every chart's `.ex4` present), same as deploy.
+A live terminal needs `confirm=true`.
+
+> **`.chr` caveat.** `.ex4` files are never rewritten by MT4, so adopt records them
+> exactly and a later `--dry-run` stays clean. MT4 *does* rewrite `.chr` on exit,
+> so a `.chr` adopted from a live terminal may show as `update` on a deploy taken
+> **after** the terminal next restarts — a benign re-place of the canonical chart
+> (the same post-drain `.chr` reconcile a normal deploy does). It is not data loss.
+
 ## Write order: stop → drain → backup → apply → start
 
 MetaTrader **rewrites `profiles/default/*.chr` when it exits**. Writing charts
@@ -74,9 +101,11 @@ A re-run with no changes skips stop/apply entirely but **still runs verify** —
 
 Only `systemctl` (stop/start) runs as root. **File mutations run as the unit's
 own `User=`** (the SSH user is that user on a correctly-configured host, matching
-`mt4_login`), and everything written is `chown`ed to it. This is required: files
-owned by root would block MetaTrader — running as that user — from rewriting
-`.chr`/`deployed.json` on its next exit.
+`mt4_login`), and everything written is `chown`ed to it. This is required for two
+reasons: MetaTrader — running as that user — rewrites its `.chr` files on exit, so
+a root-owned `.chr` would block it; and `deployed.json` (mt4ctl's own manifest,
+which MetaTrader never touches) must stay writable by the unit user so the *next*
+mt4ctl run can rewrite it.
 
 ## Concurrency
 

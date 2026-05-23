@@ -12,6 +12,7 @@ interpolated raw into a double-quoted shell context.
 
 from __future__ import annotations
 
+import base64
 import json
 from collections.abc import Iterable, Mapping
 
@@ -440,6 +441,32 @@ if [ "$U" != root ]; then
   for t in {chown_targets}; do chown -R "$U" "$DIR/$t" 2>/dev/null || true; done
 fi
 echo "APPLY{SEP}ok"
+"""
+
+
+def build_manifest_put_script(data_dir: str, manifest_json: str, unit_user: str) -> str:
+    """Write a ready-made ``deployed.json`` payload atomically, owned by *unit_user*.
+
+    Used by ``adopt`` to record an already-running bundle as managed without
+    touching any strategy file. The JSON is shipped base64-encoded and decoded
+    remotely (binary-safe, zero quoting risk), written via temp + ``mv``, then
+    ``chown``ed to the unit user — skipped when that user is ``root`` (same guard
+    as apply: when ``User=`` can't be resolved it stays owned by the SSH user,
+    which is the unit user on a correctly-configured host).
+    """
+    dir_q = sh_quote(data_dir)
+    user_q = sh_quote(unit_user)
+    payload = base64.b64encode(manifest_json.encode("utf-8")).decode("ascii")
+    return f"""\
+set -e
+DIR={dir_q}
+U={user_q}
+mkdir -p "$DIR/{MT4CTL_DIR}"
+TMP=$(mktemp "$DIR/{MT4CTL_DIR}/dep.XXXXXX")
+echo {payload} | base64 -d > "$TMP"
+mv -f "$TMP" "$DIR/{MANIFEST_REL}"
+if [ "$U" != root ]; then chown "$U" "$DIR/{MANIFEST_REL}" "$DIR/{MT4CTL_DIR}" 2>/dev/null || true; fi
+echo "ADOPT{SEP}ok"
 """
 
 

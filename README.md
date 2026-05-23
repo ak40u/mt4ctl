@@ -222,6 +222,7 @@ and an absolute `command` path if `uvx` is not on the GUI app's `PATH` (`which u
 | `mt4_autotrading` | – | AutoTrading master switch + per-EA live-trading status. |
 | `mt4_info` | – | Terminal build, broker server, and last broker ping. |
 | `mt4_deploy` | ✓ | Reconcile a terminal to a local strategy bundle (live needs `confirm`). |
+| `mt4_adopt` | ✓ | Record an already-running bundle as managed — the brownfield first cutover. |
 
 Full reference: [`docs/tools.md`](docs/tools.md).
 
@@ -235,6 +236,7 @@ mt4ctl init [path]   # write a starter terminals.yaml (default: XDG config path)
 mt4ctl list          # list configured terminals (offline)
 mt4ctl doctor        # check registry, SSH, remote tools, units, data dirs
 mt4ctl deploy <terminal> <bundle> [--dry-run] [--confirm]   # apply a strategy bundle
+mt4ctl adopt <terminal> <bundle> [--confirm]                # adopt an already-running farm
 mt4ctl serve         # run the MCP stdio server (the default with no subcommand)
 ```
 
@@ -260,7 +262,10 @@ you build the bundle), idempotent (a re-run is a no-op that still verifies healt
 and managed-subset (foreign files like a watchdog's chart are never touched). The
 write order is **stop → drain → backup → apply → start**, verify is **report-only**,
 and there is no rollback command — recovery is to re-deploy the previous bundle.
-Full model and caveats: [`docs/deploy.md`](docs/deploy.md).
+
+Already running strategies on the farm? Take it under management first with
+`mt4ctl adopt <terminal> <bundle>` (records the current footprint, changes
+nothing), then deploy as usual. Full model and caveats: [`docs/deploy.md`](docs/deploy.md).
 
 ## Security
 

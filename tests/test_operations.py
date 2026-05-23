@@ -208,8 +208,11 @@ class FakeSSH:
         self.calls: list[str] = []
         self.put_calls: list[str] = []
         self.apply_scripts: list[str] = []
+        self.manifest_put_scripts: list[str] = []
 
     def _classify(self, s: str) -> str:
+        if "ADOPT" in s:
+            return "manifest_put"
         if "tar --version" in s:
             return "preflight"
         if 'mkdir "$LD"' in s:
@@ -257,7 +260,10 @@ class FakeSSH:
                 from mt4ctl.errors import RemoteCommandError
 
                 raise RemoteCommandError(host.id, 2, "apply failed")
+        if label == "manifest_put":
+            self.manifest_put_scripts.append(script)
         out = {
+            "manifest_put": "ADOPT|ok\n",
             "lock_acquire": "LOCK|acquired\n",
             "lock_release": "LOCK|released\n",
             "preflight": "PRE|tar|ok\nPRE|sha|ok\nPRE|device|ok\n",
@@ -449,3 +455,109 @@ async def test_deploy_verify_inconclusive_connection_not_failed(registry, monkey
     result = await operations.deploy(registry, "demo1", _make_bundle(tmp_path))
     assert result.verify_ok is True
     assert "inconclusive" in result.verify_detail
+
+
+# --------------------------------------------------------------------------- #
+# adopt — brownfield first cutover
+# --------------------------------------------------------------------------- #
+def _put_manifest_files(fake):
+    """Decode the deployed.json the adopt run shipped to the host."""
+    import base64
+
+    script = fake.manifest_put_scripts[-1]
+    token = script.split("echo ", 1)[1].split(" |", 1)[0]
+    return json.loads(base64.b64decode(token))["files"]
+
+
+async def test_adopt_live_gate_before_bundle_io(registry, monkeypatch):
+    # gate must fire before read_bundle even with a nonexistent bundle path
+    async def boom(*a, **k):
+        raise AssertionError("no SSH before the live gate")
+
+    monkeypatch.setattr(ssh, "run", boom)
+    with pytest.raises(ConfirmationRequiredError):
+        await operations.adopt(registry, "live-main", "/nonexistent", confirm=False)
+
+
+async def test_adopt_happy_path_records_bundle_footprint(registry, monkeypatch, tmp_path):
+    bundle = _make_bundle(tmp_path)
+    files, _ = operations.deploy_core.read_bundle(bundle)
+    fake = FakeSSH("demo1", user="pavel", dest=dict(files))  # every dest present, hashes match
+    _install(monkeypatch, fake)
+    result = await operations.adopt(registry, "demo1", bundle)
+    assert set(result.adopted) == set(files)
+    assert result.drifted == ()
+    assert result.unit_user == "pavel"
+    assert _order(fake.calls, "lock_acquire", "remote_state", "manifest_put", "lock_release")
+    assert _put_manifest_files(fake) == files  # manifest = on-disk hashes
+
+
+async def test_adopt_refuses_when_a_bundle_file_is_absent(registry, monkeypatch, tmp_path):
+    bundle = _make_bundle(tmp_path)
+    files, _ = operations.deploy_core.read_bundle(bundle)
+    present = dict(files)
+    present.pop("MQL4/Experts/SQ/Strat.ex4")  # one dest missing on host
+    fake = FakeSSH("demo1", dest=present)
+    _install(monkeypatch, fake)
+    with pytest.raises(DeployError, match="present and readable"):
+        await operations.adopt(registry, "demo1", bundle)
+    assert "manifest_put" not in fake.calls  # nothing written
+    assert "lock_release" in fake.calls  # lock still released
+
+
+async def test_adopt_releases_lock_when_state_read_raises(registry, monkeypatch, tmp_path):
+    from mt4ctl.errors import RemoteCommandError
+
+    bundle = _make_bundle(tmp_path)
+    calls = []
+
+    async def flaky_run(host, script, **kw):
+        label = FakeSSH("demo1")._classify(script)
+        calls.append(label)
+        if label == "lock_acquire":
+            return CommandResult(0, "LOCK|acquired\n", "")
+        if label == "remote_state":
+            raise RemoteCommandError(host.id, 255, "host blip")
+        return CommandResult(0, "LOCK|released\n", "")
+
+    monkeypatch.setattr(ssh, "run", flaky_run)
+    with pytest.raises(RemoteCommandError):
+        await operations.adopt(registry, "demo1", bundle)
+    assert "lock_release" in calls  # finally released the lock despite the raise
+
+
+async def test_adopt_reports_drift_for_present_but_differing_file(registry, monkeypatch, tmp_path):
+    bundle = _make_bundle(tmp_path)
+    files, _ = operations.deploy_core.read_bundle(bundle)
+    on_host = dict(files)
+    on_host["profiles/default/a.chr"] = "different_on_host"  # drift
+    fake = FakeSSH("demo1", dest=on_host)
+    _install(monkeypatch, fake)
+    result = await operations.adopt(registry, "demo1", bundle)
+    assert result.drifted == ("profiles/default/a.chr",)
+    # the manifest records the ON-DISK hash, not the bundle hash
+    assert _put_manifest_files(fake)["profiles/default/a.chr"] == "different_on_host"
+
+
+async def test_adopt_is_bundle_scoped_watchdog_not_recorded(registry, monkeypatch, tmp_path):
+    bundle = _make_bundle(tmp_path)
+    files, _ = operations.deploy_core.read_bundle(bundle)
+    fake = FakeSSH(
+        "demo1",
+        dest=dict(files),
+        charts={"profiles/default/watchdog.chr": "Watch\\Dog"},  # foreign chart live on host
+    )
+    _install(monkeypatch, fake)
+    await operations.adopt(registry, "demo1", bundle)
+    recorded = _put_manifest_files(fake)
+    assert "profiles/default/watchdog.chr" not in recorded  # foreign file never adopted
+    assert set(recorded) == set(files)
+
+
+async def test_adopt_live_requires_confirm_then_proceeds(registry, monkeypatch, tmp_path):
+    bundle = _make_bundle(tmp_path)
+    files, _ = operations.deploy_core.read_bundle(bundle)
+    fake = FakeSSH("live-main", dest=dict(files))
+    _install(monkeypatch, fake)
+    result = await operations.adopt(registry, "live-main", bundle, confirm=True)
+    assert set(result.adopted) == set(files)

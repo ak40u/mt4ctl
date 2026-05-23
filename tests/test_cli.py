@@ -140,6 +140,56 @@ def test_deploy_missing_args_errors(monkeypatch, tmp_path):
     assert exc.value.code == 2  # argparse usage error
 
 
+def test_adopt_parses_args_and_calls_operation(monkeypatch, tmp_path, capsys):
+    _use_registry(monkeypatch, tmp_path)
+    from mt4ctl import operations
+    from mt4ctl.models import AdoptResult
+
+    captured = {}
+
+    async def fake_adopt(registry, terminal, bundle, *, confirm):
+        captured.update(terminal=terminal, bundle=bundle, confirm=confirm)
+        return AdoptResult(
+            terminal=terminal,
+            adopted=("MQL4/Experts/A.ex4",),
+            drifted=(),
+            unit_user="trader",
+            manifest_path="/d/.mt4ctl/deployed.json",
+        )
+
+    monkeypatch.setattr(operations, "adopt", fake_adopt)
+    monkeypatch.setattr("sys.argv", ["mt4ctl", "adopt", "t1", "/path/bundle", "--confirm"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 0
+    assert captured == {"terminal": "t1", "bundle": "/path/bundle", "confirm": True}
+    assert "adopted 1 files" in capsys.readouterr().out
+
+
+def test_adopt_rejects_dry_run_flag(monkeypatch, tmp_path):
+    # adopt has no preview mode — --dry-run must not be accepted
+    monkeypatch.setattr("sys.argv", ["mt4ctl", "adopt", "t1", "/b", "--dry-run"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 2  # argparse rejects unknown flag
+
+
+def test_adopt_reports_error_with_exit_1(monkeypatch, tmp_path, capsys):
+    _use_registry(monkeypatch, tmp_path)
+    from mt4ctl import operations
+    from mt4ctl.errors import DeployError
+
+    async def boom(registry, terminal, bundle, *, confirm):
+        raise DeployError("adopt requires every bundle file present on the host; absent: x.ex4")
+
+    monkeypatch.setattr(operations, "adopt", boom)
+    monkeypatch.setattr("sys.argv", ["mt4ctl", "adopt", "t1", "/b"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    assert "absent" in capsys.readouterr().err
+
+
 def test_doctor_runs_and_sets_exit_code(monkeypatch, tmp_path, capsys):
     _use_registry(monkeypatch, tmp_path)
 

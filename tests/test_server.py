@@ -5,8 +5,14 @@ from __future__ import annotations
 import pytest
 
 from mt4ctl.errors import Mt4ctlError
-from mt4ctl.models import DeployPlan, DeployResult, Env, TerminalStatus
-from mt4ctl.server import _fmt_deploy_plan, _fmt_deploy_result, _fmt_status, _guard
+from mt4ctl.models import AdoptResult, DeployPlan, DeployResult, Env, TerminalStatus
+from mt4ctl.server import (
+    _fmt_adopt_result,
+    _fmt_deploy_plan,
+    _fmt_deploy_result,
+    _fmt_status,
+    _guard,
+)
 
 
 def _status(**kw):
@@ -178,3 +184,44 @@ async def test_mt4_deploy_is_registered():
 
     tools = {t.name for t in await mcp.list_tools()}
     assert "mt4_deploy" in tools
+
+
+# --------------------------------------------------------------------------- #
+# adopt formatter + tool
+# --------------------------------------------------------------------------- #
+def test_fmt_adopt_result_clean():
+    res = AdoptResult(
+        terminal="demo3",
+        adopted=("MQL4/Experts/A.ex4", "profiles/default/a.chr"),
+        drifted=(),
+        unit_user="pavel",
+        manifest_path="/d/.mt4ctl/deployed.json",
+    )
+    out = _fmt_adopt_result(res)
+    assert "demo3: adopted 2 files (owner pavel)" in out
+    assert "/d/.mt4ctl/deployed.json" in out
+    assert "--dry-run" in out  # next-step points at deploy dry-run
+    assert "differs" not in out  # no drift section when none
+
+
+def test_fmt_adopt_result_drift():
+    res = AdoptResult(
+        terminal="demo3",
+        adopted=("profiles/default/a.chr",),
+        drifted=("profiles/default/a.chr",),
+        unit_user="pavel",
+        manifest_path="/d/.mt4ctl/deployed.json",
+    )
+    out = _fmt_adopt_result(res)
+    assert "differs from the bundle" in out
+    assert "profiles/default/a.chr" in out
+
+
+async def test_mt4_adopt_is_registered_without_dry_run():
+    from mt4ctl.server import mcp
+
+    tools = {t.name: t for t in await mcp.list_tools()}
+    assert "mt4_adopt" in tools
+    schema = tools["mt4_adopt"].inputSchema
+    assert "dry_run" not in schema.get("properties", {})  # adopt has no preview mode
+    assert set(schema.get("properties", {})) >= {"terminal", "bundle", "confirm"}

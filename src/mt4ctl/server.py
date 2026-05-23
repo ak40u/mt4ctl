@@ -19,7 +19,7 @@ from . import diagnostics, operations
 from . import login as login_mod
 from .config import load_registry
 from .errors import Mt4ctlError
-from .models import DeployPlan, DeployResult, Registry, TerminalStatus
+from .models import AdoptResult, DeployPlan, DeployResult, Registry, TerminalStatus
 
 mcp = FastMCP(
     "mt4ctl",
@@ -154,6 +154,25 @@ def _fmt_deploy_result(result: DeployResult) -> str:
     if p.notes:
         lines.append("notes:")
         lines.extend(f"  - {n}" for n in p.notes)
+    return "\n".join(lines)
+
+
+def _fmt_adopt_result(result: AdoptResult) -> str:
+    """Render an adopt: how many files were recorded, any drift, the manifest path."""
+    lines = [
+        f"{result.terminal}: adopted {len(result.adopted)} files (owner {result.unit_user})"
+    ]
+    if result.drifted:
+        lines.append(
+            f"on host but differs from the bundle — a deploy would update these "
+            f"({len(result.drifted)}):"
+        )
+        lines.extend(f"  {p}" for p in result.drifted)
+    lines.append(f"manifest: {result.manifest_path}")
+    lines.append(
+        f"next: verify with `mt4_deploy {result.terminal} <bundle> --dry-run` — it should "
+        "report no changes (a .chr may show as update after the terminal restarts; see docs)"
+    )
     return "\n".join(lines)
 
 
@@ -408,6 +427,33 @@ async def mt4_deploy(
         registry(), terminal, bundle, dry_run=dry_run, confirm=confirm
     )
     return _fmt_deploy_plan(result.plan) if result.dry_run else _fmt_deploy_result(result)
+
+
+@mcp.tool()
+@_guard
+async def mt4_adopt(terminal: str, bundle: str, confirm: bool = False) -> str:
+    """Take an already-running terminal under mt4ctl management (first cutover).
+
+    On a terminal whose strategies were NOT placed by mt4ctl, the first `mt4_deploy`
+    refuses (every existing file is an unmanaged-overwrite). Run `mt4_adopt` once
+    first: it records the bundle's footprint into the manifest at the files' current
+    on-disk hashes, so deploy can reconcile from there.
+
+    This is RECORDS-ONLY: it changes NOTHING — no upload, no restart, no preview. It
+    is bundle-scoped (foreign files like a watchdog's chart stay foreign) and
+    requires every bundle file to already be present on the host (the premise is the
+    farm runs this bundle; a missing file is refused). A live terminal needs
+    confirm=true.
+
+    `bundle` is a LOCAL directory (the same layout `mt4_deploy` takes). After adopt,
+    run `mt4_deploy <terminal> <bundle> --dry-run` to confirm a clean "no changes".
+
+    Args:
+        terminal: terminal id.
+        bundle: local bundle directory path.
+        confirm: must be true to adopt a terminal tagged env=live.
+    """
+    return _fmt_adopt_result(await operations.adopt(registry(), terminal, bundle, confirm=confirm))
 
 
 def serve() -> None:

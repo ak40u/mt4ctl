@@ -96,6 +96,23 @@ would overwrite an unmanaged file is refused. Write order is
 verify does not revert). There is no rollback command — recovery is to re-deploy
 the previous bundle. See [deploy.md](deploy.md) for the full model.
 
+## `mt4_adopt` · mutating
+
+| Arg | Type | Default | Description |
+| --- | --- | --- | --- |
+| `terminal` | string | — | terminal id |
+| `bundle` | string | — | **local** bundle the terminal already runs |
+| `confirm` | bool | `false` | required for `env: live` terminals |
+
+Takes an already-running terminal under management (the brownfield **first
+cutover**). On a terminal whose strategies mt4ctl did not place, the first
+`mt4_deploy` refuses; run `mt4_adopt` once first to record the bundle's footprint
+into `deployed.json` at the files' current on-disk hashes. **Records-only** — no
+upload, no restart, no preview (so no `dry_run`). Bundle-scoped (foreign files like
+a watchdog's chart stay foreign); every bundle file must already be present on the
+host or it refuses. After adopt, `mt4_deploy <t> <bundle> --dry-run` should report
+"no changes". See [deploy.md](deploy.md#adopting-an-existing-farm-first-cutover).
+
 ## `mt4_login` · mutating
 
 | Arg | Type | Default | Description |

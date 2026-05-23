@@ -107,6 +107,25 @@ def _cmd_deploy(terminal: str, bundle: str, *, dry_run: bool, confirm: bool) -> 
     return 0
 
 
+def _cmd_adopt(terminal: str, bundle: str, *, confirm: bool) -> int:
+    try:
+        registry = load_registry()
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    # Same skeleton as _cmd_deploy minus the dry-run axis (adopt has no preview).
+    from . import operations
+    from .server import _fmt_adopt_result
+
+    try:
+        result = asyncio.run(operations.adopt(registry, terminal, bundle, confirm=confirm))
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    print(_fmt_adopt_result(result))
+    return 0
+
+
 def _cmd_init(path: str | None) -> int:
     target = (
         Path(path).expanduser()
@@ -153,6 +172,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_deploy.add_argument("bundle", help="local bundle directory (profiles/default + MQL4/Experts)")
     p_deploy.add_argument("--dry-run", action="store_true", help="preview the plan; change nothing")
     p_deploy.add_argument("--confirm", action="store_true", help="required for env=live terminals")
+    p_adopt = sub.add_parser("adopt", help="record an already-running bundle as managed (cutover)")
+    p_adopt.add_argument("terminal", help="terminal id")
+    p_adopt.add_argument("bundle", help="local bundle directory the terminal already runs")
+    p_adopt.add_argument("--confirm", action="store_true", help="required for env=live terminals")
     return parser
 
 
@@ -171,6 +194,8 @@ def main() -> None:
         raise SystemExit(
             _cmd_deploy(args.terminal, args.bundle, dry_run=args.dry_run, confirm=args.confirm)
         )
+    if command == "adopt":
+        raise SystemExit(_cmd_adopt(args.terminal, args.bundle, confirm=args.confirm))
     raise SystemExit(2)  # unreachable; argparse rejects unknown commands
 
 

@@ -214,6 +214,48 @@ def test_parse_manifest_corrupt_raises(raw):
         deploy.parse_manifest(raw)
 
 
+# --------------------------------------------------------------------------- #
+# build_manifest — canonical serializer (inverse of parse_manifest)
+# --------------------------------------------------------------------------- #
+def test_build_manifest_round_trips_through_parse():
+    files = {
+        "MQL4/Experts/SQ/A B.ex4": "h1",  # space in path
+        'profiles/default/a"b.chr': "h2",  # quote in path
+        "MQL4/Experts/Z.ex4": "h3",
+    }
+    raw = deploy.build_manifest(files)
+    assert deploy.parse_manifest(raw) == files
+
+
+def test_build_manifest_is_sorted_and_versioned():
+    raw = deploy.build_manifest({"b.ex4": "2", "a.ex4": "1"})
+    assert raw == '{"version":1,"files":{"a.ex4":"1","b.ex4":"2"}}'
+
+
+def test_build_manifest_matches_apply_on_remote_format(tmp_path):
+    # Parity: the Python serializer must emit byte-for-byte what build_apply_script
+    # writes on the remote, so the two manifest writers can never drift. Run apply's
+    # manifest-write (place/remove empty) against real files and compare.
+    import hashlib
+    import subprocess
+
+    from mt4ctl import scripts
+
+    d = tmp_path / "data"
+    (d / ".mt4ctl").mkdir(parents=True)
+    (d / "MQL4" / "Experts").mkdir(parents=True)
+    (d / "profiles" / "default").mkdir(parents=True)
+    (d / "MQL4" / "Experts" / "A.ex4").write_bytes(b"binary-a")
+    (d / "profiles" / "default" / "a.chr").write_bytes(b"<chart>\r\n")
+    rels = ["MQL4/Experts/A.ex4", "profiles/default/a.chr"]
+    expected = {r: hashlib.sha256((d / r).read_bytes()).hexdigest() for r in rels}
+
+    apply = scripts.build_apply_script(str(d), "stg", {}, [], sorted(rels), "root")
+    assert subprocess.run(["bash", "-c", apply], capture_output=True).returncode == 0
+    on_remote = (d / ".mt4ctl" / "deployed.json").read_text()
+    assert on_remote == deploy.build_manifest(expected)
+
+
 def test_compute_plan_drift_remote_wins():
     files = {"MQL4/Experts/A.ex4": "h_bundle"}
     # manifest says h_old, but on-disk is h_drift (someone changed it) -> update + drift note
@@ -315,6 +357,29 @@ def test_compute_plan_ambiguous_reference_refuses_delete():
     assert "MQL4/Experts/Maybe.ex4" not in plan.remove
     assert "MQL4/Experts/Maybe.ex4" in plan.foreign
     assert any("ambiguous" in n for n in plan.notes)
+
+
+def test_post_adopt_deploy_is_noop_and_preserves_watchdog():
+    # Simulates the cutover: adopt recorded the bundle's footprint as the manifest;
+    # a subsequent deploy of the SAME bundle must be a no-op AND leave a live
+    # watchdog chart (+ its ex4) foreign, never removed.
+    files = {
+        "profiles/default/sq.chr": "hc",
+        "MQL4/Experts/SQ/Strat.ex4": "he",
+    }
+    chart_to_ex4 = {"profiles/default/sq.chr": "MQL4/Experts/SQ/Strat.ex4"}
+    state = RemoteState(
+        deployed=dict(files),  # the manifest adopt wrote (bundle footprint only)
+        remote_hashes=dict(files),  # on-disk matches the bundle
+        remote_chart_refs={
+            "profiles/default/sq.chr": "MQL4/Experts/SQ/Strat.ex4",
+            "profiles/default/watchdog.chr": "MQL4/Experts/Watch/Dog.ex4",  # foreign, live
+        },
+    )
+    plan = compute_plan(files, chart_to_ex4, state)
+    assert plan.has_changes is False  # cutover then re-deploy == no-op
+    assert "profiles/default/watchdog.chr" in plan.foreign
+    assert "profiles/default/watchdog.chr" not in plan.remove
 
 
 def test_compute_plan_lone_managed_chart_removed_with_its_ex4():

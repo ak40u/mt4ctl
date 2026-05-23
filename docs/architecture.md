@@ -8,7 +8,7 @@ cli.py           console entry point — serve (default) / list / doctor / init
    │
 server.py        MCP tool definitions (FastMCP) — one thin wrapper per tool
    │
-   ├── operations.py   status · logs · screenshot · control · experts · info · deploy
+   ├── operations.py   status · logs · screenshot · control · experts · info · deploy · adopt
    ├── login.py        headless first-login bootstrap
    ├── diagnostics.py  doctor checks (registry, SSH, tools, units, connections)
    ├── deploy.py       pure deploy core — bundle read, member allowlist, reconcile diff
