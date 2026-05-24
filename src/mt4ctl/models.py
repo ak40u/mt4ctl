@@ -97,6 +97,10 @@ class TerminalStatus:
     """Seconds since the newest log file was written, or ``None`` if no logs."""
     last_event: str | None = None
     """Most recent connection-related log line, if any."""
+    active_enter_seconds: int | None = None
+    """Seconds since the systemd unit became active (its uptime), or ``None`` if
+    unknown — used to tell a just-restarted *connecting* terminal from one that is
+    persistently down."""
 
     @property
     def healthy(self) -> bool:
@@ -198,6 +202,9 @@ class DeployResult:
     verify_ok: bool
     verify_detail: str
     dry_run: bool = False
+    market_watch_reset: int | None = None
+    """Count of ``symbols.sel`` files deleted when ``--reset-market-watch`` ran (MT4
+    rebuilds Market Watch on the deploy's own start); ``None`` when not requested."""
 
 
 @dataclass(frozen=True, slots=True)

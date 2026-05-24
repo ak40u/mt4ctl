@@ -6,6 +6,49 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-24
+
+Findings from a real 7-terminal deploy: verify is now trustworthy, and a few
+sharp edges from that run are smoothed.
+
+### Added
+
+- `mt4_verify` tool / `mt4ctl verify <terminal>` — a standalone, report-only
+  health gate that **polls** a terminal until it is healthy (service active +
+  broker connected) or a timeout, reporting the terminal's state at timeout.
+  Reusable after any restart, not just a deploy.
+- `deploy --reset-market-watch` (and the `reset_market_watch` tool arg) — deletes
+  `history/*/symbols.sel` inside the existing stopped window (backed up first) so
+  MT4 rebuilds Market Watch (broker default set + loaded chart symbols) on the
+  deploy's own start, capping unbounded symbol carry-over. Forces a stop/start
+  cycle even with no file changes. No binary write — `symbols.sel` is never
+  authored, only deleted while the terminal is down.
+- `deploy --verify-timeout` (and the `verify_timeout` tool arg) to tune the
+  post-restart verify poll window.
+
+### Changed
+
+- **Deploy verify now polls instead of taking a single post-start snapshot.** A
+  real terminal needs ~30–90 s to reconnect and a minute to load a large EA set,
+  so the old one-shot check reported essentially every healthy deploy as "verify
+  NOT confirmed". Verify now retries until the terminal is healthy or the window
+  (~120 s, configurable) elapses, then reports the state at timeout — so a genuine
+  failure is distinguishable from normal startup timing. (No-restart health
+  confirmations still take one snapshot.)
+- Verify EA reporting is summarized by count (`N/total experts loaded, M pending`)
+  instead of dumping the full not-yet-loaded list; names are listed only for
+  **errored** experts (the actionable set).
+- The unmanaged-overwrite refusal is now actionable for chart conflicts: a `.chr`
+  conflict that is a live foreign chart (e.g. a watchdog) tells the operator to
+  renumber the bundle's charts around the slot, or include/adopt the chart.
+- `mt4_status` distinguishes a just-restarted **connecting** terminal (broker
+  reconnect in progress, cached creds will return on their own) from a persistent
+  **down** state, instead of always suggesting `mt4_login`. Adds an
+  `active_enter_seconds` (unit uptime) field to the status protocol/`TerminalStatus`.
+- `deploy` output notes that a `.chr` shown as `update` shortly after a restart can
+  be cosmetic drift (MT4 rewrites `.chr` on exit) — the same heads-up `adopt`
+  already gives.
+
 ## [0.5.1] - 2026-05-24
 
 ### Added

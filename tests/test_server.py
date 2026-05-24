@@ -73,6 +73,28 @@ def test_fmt_status_unknown_connection_renders_question_mark():
     assert " - " in out  # missing log age shown as '-'
 
 
+def test_fmt_status_recent_restart_reads_as_connecting_not_login():
+    # disconnected but only seconds since the unit became active -> still reconnecting
+    out = _fmt_status(
+        [_status(id="demo1", service_state="active", connected=False, active_enter_seconds=8)]
+    )
+    assert "connecting" in out
+    assert "8s since restart" in out
+    assert "mt4_login" not in out  # do NOT tell the operator to re-login mid-reconnect
+
+
+def test_fmt_status_long_uptime_disconnect_is_persistent_down():
+    out = _fmt_status(
+        [
+            _status(
+                id="demo1", service_state="active", connected=False, active_enter_seconds=9999
+            )
+        ]
+    )
+    assert "no broker connection" in out
+    assert "mt4_login" in out  # genuinely down -> login is the right hint
+
+
 async def test_guard_converts_known_errors_to_message():
     @_guard
     async def boom() -> str:
@@ -134,6 +156,50 @@ def test_fmt_deploy_plan_conflicts_refused():
     assert "REFUSED" in out
     assert "MQL4/Experts/X.ex4" in out
     assert "drop them from the bundle" in out
+    assert "renumber" not in out  # an .ex4 conflict is not a chart-slot collision
+
+
+def test_fmt_deploy_plan_chart_conflict_suggests_renumber():
+    out = _fmt_deploy_plan(DeployPlan(conflicts=("profiles/default/chart72.chr",)))
+    assert "REFUSED" in out
+    assert "renumber" in out  # actionable foreign-chart-slot guidance
+
+
+def test_fmt_deploy_plan_reset_market_watch_note_in_dry_run():
+    out = _fmt_deploy_plan(DeployPlan(), reset_market_watch=True)
+    assert "--reset-market-watch" in out
+    assert "symbols.sel" in out
+
+
+def test_fmt_deploy_plan_chr_update_carries_drift_note():
+    out = _fmt_deploy_plan(DeployPlan(update=("profiles/default/a.chr",)))
+    assert "cosmetic drift" in out  # heads-up on post-restart .chr churn
+
+
+def test_fmt_deploy_result_market_watch_reset_line():
+    res = DeployResult(
+        terminal="demo1",
+        plan=DeployPlan(),
+        backup_path=None,
+        restarted=True,
+        verify_ok=True,
+        verify_detail="service=active; broker connected",
+        market_watch_reset=2,
+    )
+    out = _fmt_deploy_result(res)
+    assert "market watch: reset (2 symbols.sel removed" in out
+
+
+def test_fmt_deploy_result_no_market_watch_line_when_not_requested():
+    res = DeployResult(
+        terminal="demo1",
+        plan=DeployPlan(add=("MQL4/Experts/A.ex4",)),
+        backup_path=None,
+        restarted=True,
+        verify_ok=True,
+        verify_detail="ok",
+    )
+    assert "market watch" not in _fmt_deploy_result(res)
 
 
 def test_fmt_deploy_result_ok():
@@ -184,6 +250,13 @@ async def test_mt4_deploy_is_registered():
 
     tools = {t.name for t in await mcp.list_tools()}
     assert "mt4_deploy" in tools
+
+
+async def test_mt4_verify_is_registered():
+    from mt4ctl.server import mcp
+
+    tools = {t.name for t in await mcp.list_tools()}
+    assert "mt4_verify" in tools
 
 
 # --------------------------------------------------------------------------- #

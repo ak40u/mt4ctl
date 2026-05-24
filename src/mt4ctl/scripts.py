@@ -55,7 +55,12 @@ def build_status_script(broker_host: str | None, specs: Iterable[tuple[str, str,
     Each spec is ``(terminal_id, systemd_unit, data_dir)``. For every terminal
     it emits one line:
 
-        ``TERM|<id>|<service_state>|<log_age_s|-1>|<estab443|-1>|<last_event>``
+        ``TERM|<id>|<service_state>|<log_age_s|-1>|<estab443|-1>|<last_event>|<active_s|-1>``
+
+    The trailing ``active_s`` is the unit's uptime (seconds since it became active,
+    from ``ActiveEnterTimestampMonotonic`` vs ``/proc/uptime``), or ``-1`` when
+    unknown — it lets a just-restarted *connecting* terminal be told apart from one
+    that is persistently down.
 
     Connection is attributed per terminal by intersecting the service cgroup's
     ``terminal.exe`` PIDs with established ``:443`` sockets (optionally filtered
@@ -122,7 +127,15 @@ emit() {{
       for p in $pids; do case "$ln" in *"pid=$p,"*) estab=$((estab+1)); break ;; esac; done
     done <<< "$ESTABS"
   fi
-  echo "TERM{SEP}$id{SEP}$state{SEP}$age{SEP}$estab{SEP}$last"
+  # Unit uptime: monotonic active-since vs current boot clock, so a fresh restart
+  # reads as a small value regardless of wall-clock skew. -1 when unresolved.
+  aem=$(systemctl show -p ActiveEnterTimestampMonotonic --value "$svc" 2>/dev/null)
+  active=-1
+  if [ -n "$aem" ] && [ "$aem" -gt 0 ] 2>/dev/null; then
+    up=$(awk '{{print $1}}' /proc/uptime 2>/dev/null)
+    [ -n "$up" ] && active=$(awk -v u="$up" -v a="$aem" 'BEGIN{{d=u-a/1000000; if(d<0)d=0; printf "%d", d}}')
+  fi
+  echo "TERM{SEP}$id{SEP}$state{SEP}$age{SEP}$estab{SEP}$last{SEP}$active"
 }}
 
 {calls}
@@ -543,6 +556,39 @@ DIR={dir_q}
 U={user_q}
 {purges}
 {extract}echo "RESTORE{SEP}done"
+"""
+
+
+def build_reset_market_watch_script(data_dir: str, ts: str) -> str:
+    """Back up then delete each ``history/*/symbols.sel`` so MT4 rebuilds Market Watch.
+
+    Run **only** inside the deploy's stopped window (after drain): a live terminal
+    rewrites the file from its in-memory Market Watch on exit, so the delete must
+    follow the process leaving. On the next start MT4 rebuilds Market Watch as the
+    broker default set plus every loaded chart's symbol — capping unbounded
+    carry-over without any binary write (``symbols.sel`` is an undocumented binary
+    we never author). Every removed file is copied to the backups dir first, and
+    those copies are pruned to the newest few so folding the reset into every
+    deploy cannot grow the backups dir without bound. Best-effort (``set +e``): a
+    missing file is a no-op. Emits ``MWRESET|<count>``.
+    """
+    dir_q = sh_quote(data_dir)
+    ts_q = sh_quote(ts)
+    return f"""\
+set +e
+DIR={dir_q}
+TS={ts_q}
+BK="$DIR/{BACKUP_DIR}"
+mkdir -p "$BK"
+n=0
+for f in "$DIR"/history/*/symbols.sel; do
+  [ -e "$f" ] || continue
+  srv=$(basename "$(dirname "$f")")
+  # Delete only if the backup copy succeeded — never drop the live file without one.
+  cp -f "$f" "$BK/symbols.sel.$srv.$TS.bak" 2>/dev/null && rm -f "$f" && n=$((n+1))
+done
+ls -1t "$BK"/symbols.sel.*.bak 2>/dev/null | tail -n +7 | while IFS= read -r old; do rm -f "$old"; done
+echo "MWRESET{SEP}$n"
 """
 
 

@@ -96,8 +96,24 @@ def test_deploy_parses_args_and_calls_operation(monkeypatch, tmp_path, capsys):
 
     captured = {}
 
-    async def fake_deploy(registry, terminal, bundle, *, dry_run, confirm):
-        captured.update(terminal=terminal, bundle=bundle, dry_run=dry_run, confirm=confirm)
+    async def fake_deploy(
+        registry,
+        terminal,
+        bundle,
+        *,
+        dry_run,
+        confirm,
+        reset_market_watch,
+        verify_timeout,
+    ):
+        captured.update(
+            terminal=terminal,
+            bundle=bundle,
+            dry_run=dry_run,
+            confirm=confirm,
+            reset_market_watch=reset_market_watch,
+            verify_timeout=verify_timeout,
+        )
         return DeployResult(
             terminal=terminal,
             plan=DeployPlan(add=("MQL4/Experts/A.ex4",)),
@@ -110,7 +126,18 @@ def test_deploy_parses_args_and_calls_operation(monkeypatch, tmp_path, capsys):
 
     monkeypatch.setattr(operations, "deploy", fake_deploy)
     monkeypatch.setattr(
-        "sys.argv", ["mt4ctl", "deploy", "t1", "/path/bundle", "--dry-run", "--confirm"]
+        "sys.argv",
+        [
+            "mt4ctl",
+            "deploy",
+            "t1",
+            "/path/bundle",
+            "--dry-run",
+            "--confirm",
+            "--reset-market-watch",
+            "--verify-timeout",
+            "30",
+        ],
     )
     with pytest.raises(SystemExit) as exc:
         cli.main()
@@ -120,6 +147,8 @@ def test_deploy_parses_args_and_calls_operation(monkeypatch, tmp_path, capsys):
         "bundle": "/path/bundle",
         "dry_run": True,
         "confirm": True,
+        "reset_market_watch": True,
+        "verify_timeout": 30.0,
     }
     assert "plan: +1" in capsys.readouterr().out
 
@@ -129,7 +158,7 @@ def test_deploy_reports_error_with_exit_1(monkeypatch, tmp_path, capsys):
     from mt4ctl import operations
     from mt4ctl.errors import BundleError
 
-    async def boom(registry, terminal, bundle, *, dry_run, confirm):
+    async def boom(registry, terminal, bundle, *, dry_run, confirm, **_kw):
         raise BundleError("bundle directory not found: '/nope'")
 
     monkeypatch.setattr(operations, "deploy", boom)
@@ -145,6 +174,25 @@ def test_deploy_missing_args_errors(monkeypatch, tmp_path):
     with pytest.raises(SystemExit) as exc:
         cli.main()
     assert exc.value.code == 2  # argparse usage error
+
+
+def test_verify_parses_args_and_exit_code_reflects_health(monkeypatch, tmp_path, capsys):
+    _use_registry(monkeypatch, tmp_path)
+    from mt4ctl import operations
+
+    captured = {}
+
+    async def fake_verify(registry, terminal, *, timeout):
+        captured.update(terminal=terminal, timeout=timeout)
+        return (False, "service=active; broker NOT connected")
+
+    monkeypatch.setattr(operations, "verify", fake_verify)
+    monkeypatch.setattr("sys.argv", ["mt4ctl", "verify", "t1", "--timeout", "30"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1  # not healthy -> non-zero
+    assert captured == {"terminal": "t1", "timeout": 30.0}
+    assert "NOT healthy" in capsys.readouterr().out
 
 
 def test_adopt_parses_args_and_calls_operation(monkeypatch, tmp_path, capsys):

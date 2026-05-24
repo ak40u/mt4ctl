@@ -224,6 +224,7 @@ and an absolute `command` path if `uvx` is not on the GUI app's `PATH` (`which u
 | `mt4_info` | – | Terminal build, broker server, and last broker ping. |
 | `mt4_deploy` | ✓ | Reconcile a terminal to a local strategy bundle (live needs `confirm`). |
 | `mt4_adopt` | ✓ | Record an already-running bundle as managed — the brownfield first cutover. |
+| `mt4_verify` | – | Poll a terminal until it is healthy after a restart (or report the failure). |
 
 Full reference: [`docs/tools.md`](docs/tools.md).
 
@@ -236,8 +237,9 @@ a client:
 mt4ctl init [path]   # write a starter terminals.yaml (default: XDG config path)
 mt4ctl list          # list configured terminals (offline)
 mt4ctl doctor        # check registry, SSH, remote tools, units, data dirs
-mt4ctl deploy <terminal> <bundle> [--dry-run] [--confirm]   # apply a strategy bundle
+mt4ctl deploy <terminal> <bundle> [--dry-run] [--confirm] [--reset-market-watch]   # apply a strategy bundle
 mt4ctl adopt <terminal> <bundle> [--confirm]                # adopt an already-running farm
+mt4ctl verify <terminal> [--timeout SECONDS]                # poll until healthy after a restart
 mt4ctl serve         # run the MCP stdio server (the default with no subcommand)
 ```
 

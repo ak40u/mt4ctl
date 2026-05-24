@@ -105,6 +105,35 @@ def test_control_script_captures_state_without_extra_line():
     assert '[ -n "$st" ] || st=unknown' in out
 
 
+def test_status_script_emits_unit_uptime_field():
+    import subprocess
+
+    out = scripts.build_status_script(None, [("d", "s", "/d")])
+    # uptime is appended as a 7th field after last_event
+    assert "ActiveEnterTimestampMonotonic" in out
+    assert "/proc/uptime" in out
+    assert 'echo "TERM|$id|$state|$age|$estab|$last|$active"' in out
+    assert subprocess.run(["bash", "-n"], input=out.encode()).returncode == 0
+
+
+def test_reset_market_watch_backs_up_then_deletes_symbols_sel():
+    import subprocess
+
+    out = scripts.build_reset_market_watch_script("/home/t/d", "ts-1")
+    assert '"$DIR"/history/*/symbols.sel' in out  # globs every server's MW file
+    assert "cp -f" in out  # backed up before removal
+    assert "rm -f" in out
+    assert "MWRESET|" in out  # emits the count
+    assert scripts.BACKUP_DIR in out
+    assert "symbols.sel.*.bak" in out and "tail -n +7" in out  # bounded retention
+    assert subprocess.run(["bash", "-n"], input=out.encode()).returncode == 0
+
+
+def test_reset_market_watch_quotes_dangerous_data_dir():
+    out = scripts.build_reset_market_watch_script("/home/t/d'; rm -rf /", "ts")
+    assert "DIR='/home/t/d'\\''; rm -rf /'" in out
+
+
 def test_control_script_reports_state():
     out = scripts.build_control_script("mt4-x", "restart")
     assert "systemctl restart 'mt4-x'" in out

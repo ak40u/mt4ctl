@@ -223,6 +223,8 @@ class FakeSSH:
         self.manifest_put_scripts: list[str] = []
 
     def _classify(self, s: str) -> str:
+        if "MWRESET" in s:
+            return "mw_reset"
         if "ADOPT" in s:
             return "manifest_put"
         if "tar --version" in s:
@@ -285,6 +287,7 @@ class FakeSSH:
             "apply": "APPLY|ok\n",
             "restore": "RESTORE|done\n",
             "cursor": "CURSOR|/d/logs/20260523.log|100\n",
+            "mw_reset": "MWRESET|2\n",
             "stop": "STATE|inactive|rc=0\n",
             "start": "STATE|active|rc=0\n",
             "status": f"TERM|{self.term_id}|{self.service}|5|{self.connected}|ok\n",
@@ -465,9 +468,14 @@ async def test_deploy_verify_under_lock_release_after_verify(registry, monkeypat
 async def test_deploy_verify_fails_when_ea_load_missing(registry, monkeypatch, tmp_path):
     fake = FakeSSH("demo1", log_text="nothing relevant in the log\n")
     _install(monkeypatch, fake)
-    result = await operations.deploy(registry, "demo1", _make_bundle(tmp_path))
+    # verify_timeout=0 → single snapshot (no polling) so an unhealthy verify is
+    # reported immediately instead of waiting out the poll window.
+    result = await operations.deploy(
+        registry, "demo1", _make_bundle(tmp_path), verify_timeout=0.0
+    )
     assert result.verify_ok is False
-    assert "not confirmed" in result.verify_detail
+    # progress is summarized by count, not a full not-yet-loaded dump.
+    assert "0/1 experts loaded, 1 pending" in result.verify_detail
 
 
 async def test_deploy_apply_runs_as_unit_user(registry, monkeypatch, tmp_path):
@@ -486,6 +494,182 @@ async def test_deploy_verify_inconclusive_connection_not_failed(
     result = await operations.deploy(registry, "demo1", _make_bundle(tmp_path))
     assert result.verify_ok is True
     assert "inconclusive" in result.verify_detail
+
+
+# --------------------------------------------------------------------------- #
+# verify polling + standalone verify
+# --------------------------------------------------------------------------- #
+def test_verify_attempts_bounds():
+    assert operations._verify_attempts(0, 5) == 1  # opt out of polling
+    assert operations._verify_attempts(-1, 5) == 1
+    assert operations._verify_attempts(60, 0) == 1  # no interval -> single shot
+    assert operations._verify_attempts(10, 5) == 3
+    assert operations._verify_attempts(60, 5) == 13
+
+
+async def test_verify_polled_retries_until_healthy(registry, monkeypatch):
+    calls = {"n": 0}
+
+    async def flaky(*a, **k):
+        calls["n"] += 1
+        return (calls["n"] >= 3, f"attempt {calls['n']}")
+
+    slept: list[float] = []
+
+    async def spy_sleep(s):
+        slept.append(s)
+
+    monkeypatch.setattr(operations, "_verify_snapshot", flaky)
+    monkeypatch.setattr(operations.asyncio, "sleep", spy_sleep)
+    term = registry.terminal("demo1")
+    ok, detail = await operations._verify_polled(
+        registry, term, registry.host_of(term), set(), None, timeout=60, interval=5
+    )
+    assert ok is True
+    assert calls["n"] == 3  # stopped the moment it went healthy
+    assert detail == "attempt 3"
+    assert slept == [5, 5]  # slept between the three attempts, not after the last
+
+
+async def test_verify_polled_times_out_reports_last_state(registry, monkeypatch):
+    calls = {"n": 0}
+
+    async def never(*a, **k):
+        calls["n"] += 1
+        return (False, "still down")
+
+    async def nosleep(_s):
+        pass
+
+    monkeypatch.setattr(operations, "_verify_snapshot", never)
+    monkeypatch.setattr(operations.asyncio, "sleep", nosleep)
+    term = registry.terminal("demo1")
+    ok, detail = await operations._verify_polled(
+        registry, term, registry.host_of(term), set(), None, timeout=0.03, interval=0.01
+    )
+    assert ok is False
+    assert detail == "still down"
+    assert calls["n"] == operations._verify_attempts(0.03, 0.01)  # bounded, then gives up
+
+
+async def test_deploy_verify_healthy_first_attempt_does_not_sleep(
+    registry, monkeypatch, tmp_path
+):
+    fake = FakeSSH("demo1", log_text="Experts\tStrat: loaded\n")
+    _install(monkeypatch, fake)
+    slept: list[float] = []
+
+    async def spy_sleep(s):
+        slept.append(s)
+
+    monkeypatch.setattr(operations.asyncio, "sleep", spy_sleep)
+    # default poll window, but a healthy terminal returns on the first snapshot.
+    result = await operations.deploy(registry, "demo1", _make_bundle(tmp_path))
+    assert result.verify_ok is True
+    assert slept == []
+
+
+async def test_deploy_verify_polls_until_healthy(registry, monkeypatch, tmp_path):
+    fake = FakeSSH("demo1", log_text="Experts\tStrat: loaded\n")
+    _install(monkeypatch, fake)
+    seq = {"n": 0}
+
+    async def flaky(*a, **k):
+        seq["n"] += 1
+        return (seq["n"] >= 2, f"snap{seq['n']}")  # unhealthy once, then healthy
+
+    slept: list[float] = []
+
+    async def spy_sleep(s):
+        slept.append(s)
+
+    monkeypatch.setattr(operations, "_verify_snapshot", flaky)
+    monkeypatch.setattr(operations.asyncio, "sleep", spy_sleep)
+    result = await operations.deploy(registry, "demo1", _make_bundle(tmp_path))
+    assert result.verify_ok is True
+    assert result.verify_detail == "snap2"
+    assert slept == [operations._VERIFY_INTERVAL_S]  # one retry between two snapshots
+
+
+async def test_verify_op_reports_healthy_service_and_broker(registry, monkeypatch):
+    fake = FakeSSH("demo1")  # service active, connected -> up
+    _install(monkeypatch, fake)
+    ok, detail = await operations.verify(registry, "demo1", timeout=0.0)
+    assert ok is True
+    assert "service=active" in detail and "broker connected" in detail
+    # no expected EAs in a standalone verify -> no log read
+    assert "log_since" not in fake.calls and "logs" not in fake.calls
+
+
+async def test_verify_op_reports_unhealthy_when_broker_down(registry, monkeypatch):
+    fake = FakeSSH("demo1", connected="0")  # service active but broker down
+    _install(monkeypatch, fake)
+    ok, detail = await operations.verify(registry, "demo1", timeout=0.0)
+    assert ok is False
+    assert "broker NOT connected" in detail
+
+
+# --------------------------------------------------------------------------- #
+# market-watch reset
+# --------------------------------------------------------------------------- #
+async def test_deploy_reset_market_watch_runs_in_stopped_window(
+    registry, monkeypatch, tmp_path
+):
+    fake = FakeSSH("demo1", log_text="Experts\tStrat: loaded\n")
+    _install(monkeypatch, fake)
+    result = await operations.deploy(
+        registry, "demo1", _make_bundle(tmp_path), reset_market_watch=True
+    )
+    # the symbols.sel delete must land between drain and the restart
+    assert _order(fake.calls, "stop", "drain", "mw_reset", "start")
+    assert result.market_watch_reset == 2
+
+
+async def test_deploy_reset_only_no_changes_forces_stop_cycle(registry, monkeypatch, tmp_path):
+    bundle = _make_bundle(tmp_path)
+    files, _ = operations.deploy_core.read_bundle(bundle)
+    fake = FakeSSH(
+        "demo1",
+        manifest=_manifest_b64(files),
+        dest=dict(files),  # everything matches -> no file changes
+        log_text="Experts\tStrat: loaded\n",
+    )
+    _install(monkeypatch, fake)
+    result = await operations.deploy(registry, "demo1", bundle, reset_market_watch=True)
+    assert result.plan.has_changes is False
+    assert "mw_reset" in fake.calls
+    assert "stop" in fake.calls and "start" in fake.calls  # forced cycle for the reset
+    assert "apply" not in fake.calls  # nothing to place
+    assert result.market_watch_reset == 2
+
+
+async def test_deploy_without_reset_leaves_market_watch(registry, monkeypatch, tmp_path):
+    fake = FakeSSH("demo1", log_text="Experts\tStrat: loaded\n")
+    _install(monkeypatch, fake)
+    result = await operations.deploy(registry, "demo1", _make_bundle(tmp_path))
+    assert "mw_reset" not in fake.calls
+    assert result.market_watch_reset is None
+
+
+# --------------------------------------------------------------------------- #
+# status: connecting vs down
+# --------------------------------------------------------------------------- #
+def test_parse_active_enter_seconds(registry):
+    st = _parse_status_line("TERM|demo1|active|5|0|login on Demo|42", _term(registry, "demo1"))
+    assert st.active_enter_seconds == 42
+    assert st.connected is False
+
+
+def test_parse_active_enter_absent_when_field_missing(registry):
+    # an older host emits the 6-field line; it must still parse (field optional)
+    st = _parse_status_line("TERM|demo1|active|5|2|login on Demo", _term(registry, "demo1"))
+    assert st.active_enter_seconds is None
+    assert st.connected is True
+
+
+def test_parse_active_enter_negative_is_none(registry):
+    st = _parse_status_line("TERM|demo1|active|5|0||-1", _term(registry, "demo1"))
+    assert st.active_enter_seconds is None
 
 
 # --------------------------------------------------------------------------- #

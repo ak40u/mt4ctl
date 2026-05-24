@@ -31,9 +31,11 @@ live-main    live  2000001      active    down   41s     <-- check
 - **LOG AGE** — seconds since the newest log file was written.
 
 A terminal is healthy when `SERVICE=active` and `CONN=up`. Unhealthy rows carry a
-short reason (e.g. `<- no broker connection`), and the output ends with a
-grouped **next steps** section telling the operator what to do (e.g. run
-`mt4_login` for terminals that were never logged in).
+short reason and the output ends with a grouped **next steps** section. A
+just-restarted terminal that is `down` is reported as `connecting (Ns since
+restart)` — the broker reconnect is normal and cached credentials return on their
+own — and is told apart from a persistent `no broker connection` (which is where
+`mt4_login` is the right next step). Use `mt4_verify` to wait one out.
 
 ## `mt4_logs`
 
@@ -76,6 +78,8 @@ state.
 | `bundle` | string | — | **local** bundle directory (read here, pushed over SSH) |
 | `dry_run` | bool | `false` | preview the plan; no lock, no upload, no change |
 | `confirm` | bool | `false` | required for `env: live` terminals |
+| `reset_market_watch` | bool | `false` | delete `symbols.sel` while stopped so MT4 rebuilds Market Watch |
+| `verify_timeout` | float | `~120` | seconds to poll post-restart health before reporting |
 
 Reconciles a terminal's managed strategy files to a local bundle, idempotently.
 Apply-only: it does not select strategies, set lots/magic, generate charts, or
@@ -91,10 +95,14 @@ Always `dry_run=true` first to preview the add/update/remove/foreign plan.
 Re-running the same bundle is a no-op ("no changes") but still verifies health.
 mt4ctl touches only what **it** deployed (tracked in `.mt4ctl/deployed.json`);
 foreign files like a watchdog's chart are left untouched, and a bundle file that
-would overwrite an unmanaged file is refused. Write order is
-**stop → drain → backup → apply → start**, and verify is **report-only** (a failed
-verify does not revert). There is no rollback command — recovery is to re-deploy
-the previous bundle. See [deploy.md](deploy.md) for the full model.
+would overwrite an unmanaged file is refused (a foreign chart-slot collision tells
+you to renumber the bundle's charts around it). Write order is
+**stop → drain → backup → apply → start**, and verify **polls** until healthy or a
+timeout, **report-only** (a failed verify does not revert). `reset_market_watch`
+rebuilds the Market Watch in the stopped window to cap symbol carry-over (see
+[deploy.md](deploy.md#market-watch-reset-optional)). There is no rollback command —
+recovery is to re-deploy the previous bundle. See [deploy.md](deploy.md) for the
+full model.
 
 ## `mt4_adopt` · mutating
 
@@ -114,6 +122,19 @@ host or it refuses. It also **reports any live charts on the host that are not i
 the bundle**, so you can see exactly what was left foreign (e.g. a watchdog). After
 adopt, `mt4_deploy <t> <bundle> --dry-run` should report "no changes". See
 [deploy.md](deploy.md#adopting-an-existing-farm-first-cutover).
+
+## `mt4_verify`
+
+| Arg | Type | Default | Description |
+| --- | --- | --- | --- |
+| `terminal` | string | — | terminal id |
+| `timeout` | float | `~120` | seconds to poll before reporting |
+
+Polls a terminal until it is healthy (`SERVICE=active` and broker connected) or
+the timeout elapses, then reports its state. The same poll routine deploy uses,
+exposed standalone so it is useful after **any** restart — it waits out the broker
+reconnect instead of taking one snapshot, so a real failure is distinguishable
+from normal startup. Read-only.
 
 ## `mt4_login` · mutating
 

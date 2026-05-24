@@ -55,6 +55,12 @@ def _parse_status_line(line: str, term: Terminal) -> TerminalStatus | None:
         estab = int(estab_s)
     except ValueError:
         estab = -1
+    # The uptime field is appended by newer status scripts; tolerate its absence so
+    # an older host (or a hand-built line) still parses.
+    try:
+        active = int(parts[6]) if len(parts) >= 7 else -1
+    except ValueError:
+        active = -1
     return TerminalStatus(
         id=term.id,
         host=term.host,
@@ -64,6 +70,7 @@ def _parse_status_line(line: str, term: Terminal) -> TerminalStatus | None:
         connected=(estab > 0) if estab >= 0 else None,
         log_age_seconds=age if age >= 0 else None,
         last_event=last.strip() or None,
+        active_enter_seconds=active if active >= 0 else None,
     )
 
 
@@ -393,19 +400,35 @@ def _ea_log_state(lines: list[str], ea: str) -> str:
     return "absent"
 
 
-async def _verify_deploy(
+# A real terminal takes ~30-90 s to reconnect to the broker and a minute to load a
+# large EA set, so a single post-start snapshot reports a healthy deploy as "not
+# confirmed". Verify polls until healthy or the window elapses, then reports the
+# terminal's state at timeout — distinguishing slow startup from a genuine failure.
+_VERIFY_TIMEOUT_S = 120.0
+_VERIFY_INTERVAL_S = 6.0
+
+
+def _verify_attempts(timeout: float, interval: float) -> int:
+    """Number of health checks for a poll window (always ≥1; ``timeout<=0`` → single)."""
+    if timeout <= 0 or interval <= 0:
+        return 1
+    return max(1, int(timeout / interval) + 1)
+
+
+async def _verify_snapshot(
     registry: Registry,
     term: Terminal,
     host: Host,
     expected_eas: set[str],
     cursor: tuple[str, int] | None,
 ) -> tuple[bool, str]:
-    """Report-only health check: service active + broker + EA-load lines from the log.
+    """One report-only health check: service active + broker + EA-load lines from log.
 
     Reads the log *past* a pre-restart cursor (rotation-safe) so a ``loaded`` line
     must be fresh, never inferred from the just-written ``.chr`` (which would be
     circular). ``connected is None`` is inconclusive, not a failure; the live-bit
-    is advisory. Never reverts anything.
+    is advisory. EA progress is summarized by count (names only for *errored*
+    experts, the actionable set), not a full not-yet-loaded dump. Never reverts.
     """
     st = (await status(registry, [term.id]))[0]
     detail = [f"service={st.service_state}", _CONN_LABEL[st.connected]]
@@ -423,16 +446,44 @@ async def _verify_deploy(
         lines = log_text.lower().splitlines()
         missing = [ea for ea in sorted(expected_eas) if _ea_log_state(lines, ea) == "absent"]
         errored = [ea for ea in sorted(expected_eas) if _ea_log_state(lines, ea) == "error"]
+        total = len(expected_eas)
+        loaded = total - len(missing) - len(errored)
         if errored:
-            detail.append(f"EA load errors: {', '.join(errored)}")
+            detail.append(f"EA load errors ({len(errored)}): {', '.join(errored)}")
         if missing:
-            detail.append(f"EA load not confirmed: {', '.join(missing)}")
-        if not errored and not missing:
-            detail.append(f"{len(expected_eas)} experts loaded")
+            detail.append(f"{loaded}/{total} experts loaded, {len(missing)} pending")
+        elif not errored:
+            detail.append(f"all {total} experts loaded")
         ea_ok = not errored and not missing
 
     verify_ok = st.service_state == "active" and st.connected is not False and ea_ok
     return verify_ok, "; ".join(detail)
+
+
+async def _verify_polled(
+    registry: Registry,
+    term: Terminal,
+    host: Host,
+    expected_eas: set[str],
+    cursor: tuple[str, int] | None,
+    *,
+    timeout: float,
+    interval: float,
+) -> tuple[bool, str]:
+    """Poll :func:`_verify_snapshot` until healthy or the window elapses.
+
+    Returns the first healthy result, else the state at the final attempt. A
+    ``timeout<=0`` does exactly one snapshot (the caller opts out of polling, e.g.
+    a no-restart health confirmation where the terminal is already steady-state).
+    """
+    attempts = _verify_attempts(timeout, interval)
+    ok, detail = await _verify_snapshot(registry, term, host, expected_eas, cursor)
+    for _ in range(attempts - 1):
+        if ok:
+            return ok, detail
+        await asyncio.sleep(interval)
+        ok, detail = await _verify_snapshot(registry, term, host, expected_eas, cursor)
+    return ok, detail
 
 
 async def deploy(
@@ -442,6 +493,9 @@ async def deploy(
     *,
     dry_run: bool = False,
     confirm: bool = False,
+    reset_market_watch: bool = False,
+    verify_timeout: float | None = None,
+    verify_interval: float | None = None,
 ) -> DeployResult:
     """Reconcile a local *bundle_dir* onto a terminal (idempotent, managed-subset).
 
@@ -451,11 +505,23 @@ async def deploy(
     lock or any mutation. Recovery from a bad deploy is to re-deploy the previous
     bundle (there is no rollback command); a pre-apply backup is retained and is
     restored internally if an apply fails.
+
+    ``reset_market_watch`` deletes ``history/*/symbols.sel`` inside the stopped
+    window (backed up first) so MT4 rebuilds Market Watch on the deploy's own
+    start, capping unbounded symbol carry-over; it forces the stop/start cycle even
+    when there are no file changes. After the restart, verify *polls* up to
+    ``verify_timeout`` seconds (default :data:`_VERIFY_TIMEOUT_S`) every
+    ``verify_interval`` seconds rather than taking one snapshot, so normal reconnect
+    timing is not mistaken for a broken deploy.
     """
     term = registry.terminal(terminal_id)
     host = registry.host_of(term)
     if term.env is Env.LIVE and not confirm:
         raise ConfirmationRequiredError(terminal_id, "deploy")
+    vt = _VERIFY_TIMEOUT_S if verify_timeout is None else verify_timeout
+    # Interval is an internal knob (tunable programmatically, kept off the CLI/tool
+    # surface): the window matters to operators, the poll cadence does not.
+    vi = _VERIFY_INTERVAL_S if verify_interval is None else verify_interval
 
     files, chart_to_ex4 = deploy_core.read_bundle(bundle_dir)
     dest_paths = sorted(files)
@@ -473,6 +539,7 @@ async def deploy(
             verify_ok=False,
             verify_detail="dry-run (nothing applied)",
             dry_run=True,
+            market_watch_reset=None,
         )
 
     holder = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
@@ -491,64 +558,80 @@ async def deploy(
     apply_error: RemoteCommandError | None = None
     cursor: tuple[str, int] | None = None
     verify_detail = ""
+    mw_reset: int | None = None
     plan = DeployPlan()
     try:
         state, unit_user = await _read_remote_state(host, term, dest_paths)
         plan = deploy_core.compute_plan(files, chart_to_ex4, state)
         if plan.conflicts:
-            raise DeployError(
-                "refusing to overwrite files mt4ctl does not manage: "
-                + ", ".join(plan.conflicts)
-            )
-        if not plan.has_changes:
+            raise DeployError(_conflict_message(plan.conflicts))
+        # A pure --reset-market-watch (no file changes) still needs the stop window:
+        # symbols.sel must be deleted while the terminal is down.
+        needs_stop = plan.has_changes or reset_market_watch
+        if not needs_stop:
             needs_verify = True  # no changes, but still confirm the terminal is healthy
         else:
-            await _deploy_preflight(host, term.data_dir)
+            if plan.has_changes:
+                await _deploy_preflight(host, term.data_dir)
             await control(registry, term.id, "stop", confirm=confirm)
             stopped = needs_verify = True
             await _drain(host, term.service)
 
-            # MT4 rewrites `.chr` on exit, so the pre-stop `.chr` classification is
-            # stale — recompute it against the quiesced files (`.ex4` is never
-            # written by MT4, so its pre-stop diff stands).
-            chr_dests = [p for p in dest_paths if p.endswith(".chr")]
-            if chr_dests:
-                fresh, _ = await _read_remote_state(host, term, chr_dests)
-                state = replace(
-                    state, remote_hashes={**state.remote_hashes, **fresh.remote_hashes}
-                )
-                plan = deploy_core.compute_plan(files, chart_to_ex4, state)
-
-            manifest_existing = sorted(state.deployed or {})
-            backup = await ssh.run(
-                host,
-                scripts.build_backup_script(term.data_dir, manifest_existing, _timestamp()),
-                check=False,
-            )
-            backup_val = _line_value(backup.stdout, "BACKUP")
-            backup_path = None if backup_val in (None, "none") else backup_val
-
-            place_rel = sorted([*plan.add, *plan.update])
-            staging = f"{scripts.STAGING_DIR}/{uuid.uuid4().hex}"
-            tar_bytes = _build_bundle_tar(bundle_dir, place_rel)
-            await ssh.put_tar(host, tar_bytes, f"{term.data_dir}/{staging}")
-
-            place = {rel: files[rel] for rel in place_rel}
-            apply_script = scripts.build_apply_script(
-                term.data_dir, staging, place, list(plan.remove), sorted(files), unit_user
-            )
-            try:
-                await ssh.run(host, apply_script, check=True)
-            except RemoteCommandError as exc:
-                apply_error = exc
-                touched = sorted({*plan.add, *plan.update, *plan.remove})
-                await ssh.run(
+            if reset_market_watch:
+                mw = await ssh.run(
                     host,
-                    scripts.build_restore_script(
-                        term.data_dir, backup_path, touched, unit_user
+                    scripts.build_reset_market_watch_script(term.data_dir, _timestamp()),
+                    check=False,
+                )
+                mw_val = _line_value(mw.stdout, "MWRESET")
+                mw_reset = int(mw_val) if mw_val and mw_val.isdigit() else 0
+
+            # The apply machinery runs only for real file changes; a reset-only
+            # deploy stops, resets Market Watch, and restarts without placing files.
+            if plan.has_changes:
+                # MT4 rewrites `.chr` on exit, so the pre-stop `.chr` classification
+                # is stale — recompute it against the quiesced files (`.ex4` is never
+                # written by MT4, so its pre-stop diff stands).
+                chr_dests = [p for p in dest_paths if p.endswith(".chr")]
+                if chr_dests:
+                    fresh, _ = await _read_remote_state(host, term, chr_dests)
+                    state = replace(
+                        state, remote_hashes={**state.remote_hashes, **fresh.remote_hashes}
+                    )
+                    plan = deploy_core.compute_plan(files, chart_to_ex4, state)
+
+                manifest_existing = sorted(state.deployed or {})
+                backup = await ssh.run(
+                    host,
+                    scripts.build_backup_script(
+                        term.data_dir, manifest_existing, _timestamp()
                     ),
                     check=False,
                 )
+                backup_val = _line_value(backup.stdout, "BACKUP")
+                backup_path = None if backup_val in (None, "none") else backup_val
+
+                place_rel = sorted([*plan.add, *plan.update])
+                staging = f"{scripts.STAGING_DIR}/{uuid.uuid4().hex}"
+                tar_bytes = _build_bundle_tar(bundle_dir, place_rel)
+                await ssh.put_tar(host, tar_bytes, f"{term.data_dir}/{staging}")
+
+                place = {rel: files[rel] for rel in place_rel}
+                apply_script = scripts.build_apply_script(
+                    term.data_dir, staging, place, list(plan.remove), sorted(files), unit_user
+                )
+                try:
+                    await ssh.run(host, apply_script, check=True)
+                except RemoteCommandError as exc:
+                    apply_error = exc
+                    touched = sorted({*plan.add, *plan.update, *plan.remove})
+                    await ssh.run(
+                        host,
+                        scripts.build_restore_script(
+                            term.data_dir, backup_path, touched, unit_user
+                        ),
+                        check=False,
+                    )
     finally:
         exc_active = sys.exc_info()[0] is not None
         try:
@@ -566,8 +649,16 @@ async def deploy(
                 except RemoteCommandError:
                     restarted = False
             if needs_verify and not exc_active and apply_error is None:
-                verify_ok, verify_detail = await _verify_deploy(
-                    registry, term, host, expected_eas, cursor
+                # Poll only when we restarted (broker reconnect takes time); a
+                # no-restart health confirmation reads steady-state in one snapshot.
+                verify_ok, verify_detail = await _verify_polled(
+                    registry,
+                    term,
+                    host,
+                    expected_eas,
+                    cursor,
+                    timeout=vt if stopped else 0.0,
+                    interval=vi,
                 )
         finally:
             # The lock is always released, even if start/verify raised above.
@@ -588,7 +679,25 @@ async def deploy(
         verify_ok=verify_ok,
         verify_detail=verify_detail,
         dry_run=False,
+        market_watch_reset=mw_reset,
     )
+
+
+def _conflict_message(conflicts: tuple[str, ...]) -> str:
+    """Actionable refusal text for an unmanaged-overwrite conflict.
+
+    A ``.chr`` conflict is almost always a live foreign chart (e.g. a watchdog)
+    sitting on a slot the bundle now wants — MT4 numbers charts contiguously, so a
+    larger selection collides with it. Point the operator at the real fix rather
+    than a bare "refusing to overwrite".
+    """
+    msg = "refusing to overwrite files mt4ctl does not manage: " + ", ".join(conflicts)
+    if any(c.endswith(".chr") for c in conflicts):
+        msg += (
+            " — a foreign chart occupies a slot your bundle needs; renumber the "
+            "bundle's charts to skip that slot, or include/adopt the chart"
+        )
+    return msg
 
 
 def _timestamp() -> str:
@@ -669,4 +778,31 @@ async def adopt(
         foreign=foreign,
         unit_user=unit_user,
         manifest_path=f"{term.data_dir}/{scripts.MANIFEST_REL}",
+    )
+
+
+async def verify(
+    registry: Registry,
+    terminal_id: str,
+    *,
+    timeout: float | None = None,
+    interval: float | None = None,
+) -> tuple[bool, str]:
+    """Poll a terminal until it is healthy (service active + broker up) or times out.
+
+    A reusable, report-only health gate for use after *any* restart, not just a
+    deploy: it waits out the broker reconnect instead of taking one snapshot, and
+    reports the terminal's state at timeout so a genuine failure is distinguishable
+    from slow startup. Returns ``(healthy, detail)``; never mutates the terminal.
+    """
+    term = registry.terminal(terminal_id)
+    host = registry.host_of(term)
+    return await _verify_polled(
+        registry,
+        term,
+        host,
+        set(),
+        None,
+        timeout=_VERIFY_TIMEOUT_S if timeout is None else timeout,
+        interval=_VERIFY_INTERVAL_S if interval is None else interval,
     )

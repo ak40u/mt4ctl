@@ -85,7 +85,15 @@ def _cmd_doctor() -> int:
     return 1 if any(c.status == "fail" for c in checks) else 0
 
 
-def _cmd_deploy(terminal: str, bundle: str, *, dry_run: bool, confirm: bool) -> int:
+def _cmd_deploy(
+    terminal: str,
+    bundle: str,
+    *,
+    dry_run: bool,
+    confirm: bool,
+    reset_market_watch: bool,
+    verify_timeout: float | None,
+) -> int:
     try:
         registry = load_registry()
     except Mt4ctlError as exc:
@@ -98,13 +106,42 @@ def _cmd_deploy(terminal: str, bundle: str, *, dry_run: bool, confirm: bool) -> 
 
     try:
         result = asyncio.run(
-            operations.deploy(registry, terminal, bundle, dry_run=dry_run, confirm=confirm)
+            operations.deploy(
+                registry,
+                terminal,
+                bundle,
+                dry_run=dry_run,
+                confirm=confirm,
+                reset_market_watch=reset_market_watch,
+                verify_timeout=verify_timeout,
+            )
         )
     except Mt4ctlError as exc:
         _print_err(f"error: {exc}")
         return 1
-    print(_fmt_deploy_plan(result.plan) if result.dry_run else _fmt_deploy_result(result))
+    print(
+        _fmt_deploy_plan(result.plan, reset_market_watch=reset_market_watch)
+        if result.dry_run
+        else _fmt_deploy_result(result)
+    )
     return 0
+
+
+def _cmd_verify(terminal: str, *, timeout: float | None) -> int:
+    try:
+        registry = load_registry()
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    from . import operations
+
+    try:
+        ok, detail = asyncio.run(operations.verify(registry, terminal, timeout=timeout))
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    print(f"{terminal}: {'healthy' if ok else 'NOT healthy'} ({detail})")
+    return 0 if ok else 1
 
 
 def _cmd_adopt(terminal: str, bundle: str, *, confirm: bool) -> int:
@@ -178,6 +215,29 @@ def build_parser() -> argparse.ArgumentParser:
     p_deploy.add_argument(
         "--confirm", action="store_true", help="required for env=live terminals"
     )
+    p_deploy.add_argument(
+        "--reset-market-watch",
+        action="store_true",
+        help="delete symbols.sel while stopped so MT4 rebuilds Market Watch on start",
+    )
+    p_deploy.add_argument(
+        "--verify-timeout",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="seconds to poll post-restart health before reporting (default ~120)",
+    )
+    p_verify = sub.add_parser(
+        "verify", help="poll a terminal until healthy (service active + broker up)"
+    )
+    p_verify.add_argument("terminal", help="terminal id")
+    p_verify.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="seconds to poll before reporting (default ~120)",
+    )
     p_adopt = sub.add_parser(
         "adopt", help="record an already-running bundle as managed (cutover)"
     )
@@ -202,8 +262,17 @@ def main() -> None:
         raise SystemExit(_cmd_init(args.path))
     if command == "deploy":
         raise SystemExit(
-            _cmd_deploy(args.terminal, args.bundle, dry_run=args.dry_run, confirm=args.confirm)
+            _cmd_deploy(
+                args.terminal,
+                args.bundle,
+                dry_run=args.dry_run,
+                confirm=args.confirm,
+                reset_market_watch=args.reset_market_watch,
+                verify_timeout=args.verify_timeout,
+            )
         )
+    if command == "verify":
+        raise SystemExit(_cmd_verify(args.terminal, timeout=args.timeout))
     if command == "adopt":
         raise SystemExit(_cmd_adopt(args.terminal, args.bundle, confirm=args.confirm))
     raise SystemExit(2)  # unreachable; argparse rejects unknown commands

@@ -194,6 +194,34 @@ def test_compute_plan_unmanaged_collision_refuses():
     assert any("not managed" in n for n in plan.notes)
 
 
+def test_compute_plan_foreign_chart_conflict_is_actionable():
+    # the bundle's chart lands on a slot held by a live foreign chart (a watchdog):
+    # the refusal note must point at renumbering, not a bare "not managed".
+    chart = "profiles/default/chart72.chr"
+    files = {chart: "h"}
+    state = RemoteState(
+        deployed={},
+        dest_stats={chart: True},
+        remote_chart_refs={chart: None},  # a live chart on that slot
+    )
+    plan = compute_plan(files, {}, state)
+    assert plan.conflicts == (chart,)
+    assert any("renumber" in n and "live chart" in n for n in plan.notes)
+
+
+def test_read_bundle_accepts_no_expert_chart(tmp_path):
+    # A bare chart (no <expert> block) adds a symbol to Market Watch and runs
+    # nothing — it is a managed member with no .ex4 requirement. (Used to provision
+    # conversion symbols from the bundle without a binary symbols.sel write.)
+    root = tmp_path / "bundle"
+    cdir = root / "profiles" / "default"
+    cdir.mkdir(parents=True)
+    (cdir / "USDCAD.chr").write_text("\r\n".join(["<chart>", "symbol=USDCAD", "digits=5", ""]))
+    files, chart_to_ex4 = read_bundle(root)
+    assert "profiles/default/USDCAD.chr" in files
+    assert chart_to_ex4 == {}  # no expert reference -> no .ex4 integrity requirement
+
+
 def test_parse_manifest_absent_and_marker():
     assert deploy.parse_manifest(None) is None
     assert deploy.parse_manifest("") is None

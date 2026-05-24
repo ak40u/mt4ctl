@@ -99,7 +99,8 @@ on exit. So a real deploy:
 6. **start** the unit again — always, in a `finally:`, even if apply failed.
 
 A re-run with no changes skips stop/apply entirely but **still runs verify** — so
-"no changes" can never hide a terminal that is silently down.
+"no changes" can never hide a terminal that is silently down. (`--reset-market-watch`
+forces the stop/start cycle even with no changes — see below.)
 
 ### File ownership
 
@@ -136,18 +137,30 @@ never strand it.
 
 ## Verify is report-only
 
-After restart, verify reports health — it never reverts a deploy:
+After a restart, verify **polls** the terminal until it is healthy or a timeout
+elapses (default ~120 s, `--verify-timeout`), then reports its state — it never
+reverts a deploy. Polling matters because a real terminal needs ~30–90 s to
+reconnect to the broker and a minute to load a large EA set; a single immediate
+snapshot would report essentially every healthy deploy as "not confirmed". A
+no-change health confirmation (no restart) takes one snapshot, not the poll loop.
+
+Verify checks:
 
 - the systemd service is `active`;
 - the broker connection is up (`None` = **inconclusive**, not a failure — socket
   attribution needs same-user or root; the live-trading bit is advisory only);
 - each expected expert has a fresh **load line in the terminal log**, read from a
   cursor captured just before restart (rotation- and truncation-safe), **not**
-  inferred from the just-written `.chr` (which would be circular).
+  inferred from the just-written `.chr` (which would be circular). Progress is
+  summarized by count (`N/total loaded, M pending`); names are listed only for
+  experts that **errored**.
 
 A failed verify (`verify_ok=False`) means *check the terminal*, not *the deploy
 broke* — the files were placed and the unit restarted regardless. Recovery is
 always to re-deploy a known-good bundle.
+
+The same poll routine is available standalone as `mt4_verify <terminal>` /
+`mt4ctl verify <terminal>` for use after any restart, not just a deploy.
 
 ## Recovery
 
@@ -156,6 +169,32 @@ is restored **internally** if an apply fails (touched paths are purged, then the
 backup is re-extracted, before the terminal restarts — so it never starts on a
 half-applied tree). For operator-level recovery, **re-deploy the previous
 bundle** — the caller holds it.
+
+## Market Watch reset (optional)
+
+`deploy --reset-market-watch` (tool arg `reset_market_watch`) caps unbounded
+Market Watch growth. MT4 never prunes a symbol once it has been selected, so a
+terminal's `symbols.sel` accumulates symbols across rotations (sockets it does not
+need). With the flag set, the deploy — inside its **stopped window**, after drain
+and before start — backs up then deletes `history/*/symbols.sel`; on the next
+start MT4 rebuilds Market Watch from scratch as **the broker default set (~10
+symbols) plus every loaded chart's symbol**. So every traded symbol (and any
+no-expert *conversion* chart's symbol) is preserved, while the carry-over is gone.
+
+- It is a **file delete in a stopped window**, never a binary write — mt4ctl does
+  not author the undocumented `symbols.sel` format. The removed file is copied to
+  `<data_dir>/.mt4ctl/backups/` first.
+- The flag forces a stop/start cycle **even with no file changes** (the reset
+  needs the terminal down), so it can be used on its own to reset Market Watch.
+- It only deletes while the terminal is confirmed stopped (a running terminal
+  rewrites `symbols.sel` from its in-memory Market Watch on exit).
+- On a `--dry-run`, it is reported but not performed.
+- A live terminal still requires `confirm=true` (the deploy's own live gate).
+
+To *add* a needed symbol to Market Watch, put a chart for it in the bundle (MT4
+adds a chart's symbol on load) — that is the bundle builder's job, kept out of
+generic mt4ctl. The ~10 broker defaults always return on a rebuild; removing them
+would require writing `symbols.sel`, which is out of scope.
 
 ## Trust boundary
 

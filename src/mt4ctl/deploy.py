@@ -262,9 +262,16 @@ def compute_plan(
                     notes.append(f"drift: {path} changed on host since deploy — overwriting")
         elif dest_stats.get(path, False):
             conflicts.append(path)
-            notes.append(
-                f"refuse: {path} exists on host but is not managed by mt4ctl — will not overwrite"
-            )
+            if path.endswith(".chr") and path in remote_state.remote_chart_refs:
+                notes.append(
+                    f"refuse: {path} is a live chart not in this bundle (e.g. a watchdog) — "
+                    "renumber the bundle's charts to skip this slot, or include/adopt it"
+                )
+            else:
+                notes.append(
+                    f"refuse: {path} exists on host but is not managed by mt4ctl — "
+                    "will not overwrite"
+                )
         else:
             add.append(path)
 

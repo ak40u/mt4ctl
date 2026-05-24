@@ -31,7 +31,8 @@ mcp = FastMCP(
         "confirm=true): mt4_control (start/stop/restart), mt4_login (one-time "
         "headless login), mt4_deploy (reconcile a terminal to a local strategy "
         "bundle), mt4_adopt (record an already-running bundle as managed — the "
-        "first cutover, before the first mt4_deploy on an existing farm)."
+        "first cutover, before the first mt4_deploy on an existing farm). "
+        "mt4_verify polls a terminal until it is healthy after a restart."
     ),
 )
 
@@ -63,6 +64,11 @@ def _guard(fn: Callable[..., Awaitable[R]]) -> Callable[..., Awaitable[R | str]]
     return wrapper
 
 
+# A terminal active for less than this is treated as still *connecting* (broker
+# reconnect normally takes ~30-90s after a restart) rather than persistently down.
+_CONNECTING_GRACE_S = 120
+
+
 def _diagnose(s: TerminalStatus) -> tuple[str, str]:
     """Return ``(reason, next_action)`` for a non-healthy terminal, else ``("", "")``.
 
@@ -77,6 +83,13 @@ def _diagnose(s: TerminalStatus) -> tuple[str, str]:
         return (f"unit {s.service_state}", "run `mt4_control <id> start`")
     if s.connected is None:
         return ("connection unknown", "run `mt4_doctor` (attribution needs same-user or root)")
+    # connected is False — distinguish a fresh restart still reconnecting (cached
+    # creds will come back on their own) from a genuine persistent disconnect.
+    if s.active_enter_seconds is not None and s.active_enter_seconds < _CONNECTING_GRACE_S:
+        return (
+            f"connecting ({s.active_enter_seconds}s since restart)",
+            "wait for the broker reconnect, then re-check with `mt4_verify <id>`",
+        )
     return (
         "no broker connection",
         "check `mt4_logs <id>`; run `mt4_login <id>` if not logged in",
@@ -108,7 +121,22 @@ def _fmt_status(rows: list[TerminalStatus]) -> str:
     return "\n".join(lines)
 
 
-def _fmt_deploy_plan(plan: DeployPlan) -> str:
+def _chr_drift_note(update: tuple[str, ...]) -> str | None:
+    """Heads-up when a ``.chr`` is being updated: it may be cosmetic post-restart drift.
+
+    MT4 rewrites ``profiles/default/*.chr`` on exit, so a chart can show as
+    ``update`` shortly after a restart even though its content is effectively the
+    same — re-running confirms whether the change is real.
+    """
+    if any(p.endswith(".chr") for p in update):
+        return (
+            "note: MT4 rewrites .chr on exit, so a .chr shown as 'update' shortly after a "
+            "restart can be cosmetic drift — re-run with dry_run to confirm before applying."
+        )
+    return None
+
+
+def _fmt_deploy_plan(plan: DeployPlan, *, reset_market_watch: bool = False) -> str:
     """Render a (dry-run) plan: what would change, what stays foreign, why."""
     lines: list[str] = []
     for label, items in (("add", plan.add), ("update", plan.update), ("remove", plan.remove)):
@@ -126,6 +154,18 @@ def _fmt_deploy_plan(plan: DeployPlan) -> str:
         )
         lines.extend(f"  {p}" for p in plan.conflicts)
         lines.append("  next: remove/rename them on the host, or drop them from the bundle")
+        if any(p.endswith(".chr") for p in plan.conflicts):
+            lines.append(
+                "        a foreign chart sits on a slot your bundle needs — renumber the "
+                "bundle's charts to skip it, or include/adopt that chart"
+            )
+    if reset_market_watch:
+        lines.append(
+            "--reset-market-watch: would delete symbols.sel in the stopped window; MT4 "
+            "rebuilds Market Watch (broker default + chart symbols) on start"
+        )
+    if (note := _chr_drift_note(plan.update)) is not None:
+        lines.append(note)
     if plan.notes:
         lines.append("notes:")
         lines.extend(f"  - {n}" for n in plan.notes)
@@ -153,6 +193,11 @@ def _fmt_deploy_result(result: DeployResult) -> str:
         if result.restarted
         else "restarted: NO — run `mt4_control <id> start`"
     )
+    if result.market_watch_reset is not None:
+        lines.append(
+            f"market watch: reset ({result.market_watch_reset} symbols.sel removed; "
+            "MT4 rebuilt it from broker default + chart symbols on start)"
+        )
     lines.append(
         f"verify: {'ok' if result.verify_ok else 'NOT confirmed'} ({result.verify_detail})"
     )
@@ -161,6 +206,8 @@ def _fmt_deploy_result(result: DeployResult) -> str:
             "  note: verify is report-only and did NOT revert the deploy; "
             "check `mt4_logs`/`mt4_status`. Recovery = re-deploy the previous bundle."
         )
+    if (note := _chr_drift_note(p.update)) is not None:
+        lines.append(note)
     if p.notes:
         lines.append("notes:")
         lines.extend(f"  - {n}" for n in p.notes)
@@ -411,7 +458,12 @@ async def mt4_info(terminal: str = "all") -> str:
 @mcp.tool()
 @_guard
 async def mt4_deploy(
-    terminal: str, bundle: str, dry_run: bool = False, confirm: bool = False
+    terminal: str,
+    bundle: str,
+    dry_run: bool = False,
+    confirm: bool = False,
+    reset_market_watch: bool = False,
+    verify_timeout: float | None = None,
 ) -> str:
     """Deploy a strategy bundle to a terminal — idempotent, managed-subset.
 
@@ -433,16 +485,34 @@ async def mt4_deploy(
     recover, re-deploy the previous bundle (a pre-apply backup is also retained
     and is restored automatically if an apply fails).
 
+    reset_market_watch deletes symbols.sel in the stopped window (backed up first)
+    so MT4 rebuilds Market Watch on the deploy's own start — caps unbounded symbol
+    carry-over; it forces a stop/start cycle even with no file changes. After the
+    restart, verify polls up to verify_timeout seconds rather than taking a single
+    snapshot, so normal reconnect timing is not reported as a failed deploy.
+
     Args:
         terminal: terminal id.
         bundle: local bundle directory path.
         dry_run: preview the plan without changing anything (no lock, no upload).
         confirm: must be true to deploy to a terminal tagged env=live.
+        reset_market_watch: rebuild Market Watch by deleting symbols.sel while stopped.
+        verify_timeout: seconds to poll post-restart health before reporting (default ~120).
     """
     result = await operations.deploy(
-        registry(), terminal, bundle, dry_run=dry_run, confirm=confirm
+        registry(),
+        terminal,
+        bundle,
+        dry_run=dry_run,
+        confirm=confirm,
+        reset_market_watch=reset_market_watch,
+        verify_timeout=verify_timeout,
     )
-    return _fmt_deploy_plan(result.plan) if result.dry_run else _fmt_deploy_result(result)
+    return (
+        _fmt_deploy_plan(result.plan, reset_market_watch=reset_market_watch)
+        if result.dry_run
+        else _fmt_deploy_result(result)
+    )
 
 
 @mcp.tool()
@@ -472,6 +542,23 @@ async def mt4_adopt(terminal: str, bundle: str, confirm: bool = False) -> str:
     return _fmt_adopt_result(
         await operations.adopt(registry(), terminal, bundle, confirm=confirm)
     )
+
+
+@mcp.tool()
+@_guard
+async def mt4_verify(terminal: str, timeout: float | None = None) -> str:
+    """Poll a terminal until it is healthy (service active + broker connected) or times out.
+
+    Use after any restart to wait out the broker reconnect instead of guessing:
+    instead of one snapshot it polls and reports the terminal's state at timeout,
+    so a real failure is distinguishable from normal startup timing. Read-only.
+
+    Args:
+        terminal: terminal id.
+        timeout: seconds to poll before reporting (default ~120).
+    """
+    ok, detail = await operations.verify(registry(), terminal, timeout=timeout)
+    return f"{terminal}: {'healthy' if ok else 'NOT healthy'} ({detail})"
 
 
 def serve() -> None:
