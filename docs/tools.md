@@ -4,6 +4,13 @@ All tools are exposed over the MCP stdio transport. Read-only tools are always
 available; mutating tools (`mt4_control`, `mt4_login`) require `confirm=true` when
 the target terminal is tagged `env: live`.
 
+Every tool below is also a **CLI subcommand** (drop the `mt4_` prefix, e.g.
+`mt4_status` → `mt4ctl status`; `mt4_ea_list` → `mt4ctl ea-list`), so the same
+operations can be scripted without an MCP client. The CLI and the tools share the
+same implementation and formatters. See the [CLI section](../README.md#cli) for the
+full command list; health commands (`status`, `verify`, `doctor`) exit non-zero
+when something is unhealthy.
+
 ## `mt4_list`
 
 List configured terminals with host, account, and environment. Offline — no SSH.

@@ -7,7 +7,6 @@ spawn locally.
 
 from __future__ import annotations
 
-import asyncio
 import functools
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
@@ -19,7 +18,15 @@ from . import diagnostics, operations
 from . import login as login_mod
 from .config import load_registry
 from .errors import Mt4ctlError
-from .models import AdoptResult, DeployPlan, DeployResult, Registry, TerminalStatus
+from .models import (
+    AdoptResult,
+    DeployPlan,
+    DeployResult,
+    ExpertsReport,
+    Registry,
+    TerminalInfo,
+    TerminalStatus,
+)
 
 mcp = FastMCP(
     "mt4ctl",
@@ -118,6 +125,60 @@ def _fmt_status(rows: list[TerminalStatus]) -> str:
         lines.append("\nnext steps:")
         for (reason, action), ids in next_steps.items():
             lines.append(f"  {reason} ({', '.join(ids)}): {action}")
+    return "\n".join(lines)
+
+
+def _fmt_control(terminal: str, action: str, st: TerminalStatus) -> str:
+    conn = {True: "up", False: "down", None: "?"}[st.connected]
+    return f"{terminal}: {action} done -> service={st.service_state}, conn={conn}"
+
+
+def _fmt_experts(ids: list[str], reports: list[ExpertsReport]) -> str:
+    """Single terminal → its EA names; many → one count line each."""
+    if len(ids) == 1:
+        r = reports[0]
+        if r.error:
+            return f"{ids[0]}: unreachable — {r.error}"
+        names = "\n".join(f"  {e.short_name}" for e in r.experts) or "  (none)"
+        return f"{ids[0]}: {len(r.experts)} experts\n{names}"
+    return "\n".join(
+        f"{r.terminal:<12} unreachable — {r.error}"
+        if r.error
+        else f"{r.terminal:<12} {len(r.experts):>4} experts"
+        for r in reports
+    )
+
+
+def _fmt_autotrading(reports: list[ExpertsReport]) -> str:
+    lines = [f"{'TERMINAL':<12} {'AUTOTRADING':<12} EXPERTS"]
+    for r in reports:
+        if r.error:
+            lines.append(f"{r.terminal:<12} {'?':<12} unreachable — {r.error}")
+            continue
+        master = {True: "on", False: "OFF", None: "?"}[r.master]
+        total = len(r.experts)
+        live = sum(e.live_trading is True for e in r.experts)
+        off = [e.short_name for e in r.experts if e.live_trading is False]
+        unknown = sum(e.live_trading is None for e in r.experts)
+        note = ""
+        if r.master is False:
+            note = "  <- master AutoTrading OFF; nothing trades"
+        elif off:
+            note = f"  <- {len(off)} EA live-trading off: {', '.join(off[:5])}"
+        elif unknown:
+            note = f"  <- {unknown} EA flags unreadable"
+        lines.append(f"{r.terminal:<12} {master:<12} {live}/{total} live{note}")
+    return "\n".join(lines)
+
+
+def _fmt_info(infos: list[TerminalInfo]) -> str:
+    lines = [f"{'TERMINAL':<12} {'BUILD':<22} {'SERVER':<18} PING"]
+    for i in infos:
+        if i.error:
+            lines.append(f"{i.terminal:<12} unreachable — {i.error}")
+            continue
+        ping = "-" if i.ping_ms is None else f"{i.ping_ms:.0f}ms"
+        lines.append(f"{i.terminal:<12} {(i.build or '-'):<22} {(i.server or '-'):<18} {ping}")
     return "\n".join(lines)
 
 
@@ -299,8 +360,7 @@ async def mt4_control(terminal: str, action: str, confirm: bool = False) -> str:
         confirm: must be true to act on a terminal tagged env=live.
     """
     st = await operations.control(registry(), terminal, action, confirm=confirm)
-    conn = {True: "up", False: "down", None: "?"}[st.connected]
-    return f"{terminal}: {action} done -> service={st.service_state}, conn={conn}"
+    return _fmt_control(terminal, action, st)
 
 
 @mcp.tool()
@@ -377,19 +437,7 @@ async def mt4_ea_list(terminal: str = "all") -> str:
     """
     reg = registry()
     ids = list(reg.terminals) if terminal == "all" else [terminal]
-    reports = await asyncio.gather(*(operations.experts(reg, t) for t in ids))
-    if len(ids) == 1:
-        r = reports[0]
-        if r.error:
-            return f"{ids[0]}: unreachable — {r.error}"
-        names = "\n".join(f"  {e.short_name}" for e in r.experts) or "  (none)"
-        return f"{ids[0]}: {len(r.experts)} experts\n{names}"
-    return "\n".join(
-        f"{r.terminal:<12} unreachable — {r.error}"
-        if r.error
-        else f"{r.terminal:<12} {len(r.experts):>4} experts"
-        for r in reports
-    )
+    return _fmt_experts(ids, await operations.experts_all(reg, ids))
 
 
 @mcp.tool()
@@ -409,26 +457,7 @@ async def mt4_autotrading(terminal: str = "all") -> str:
     """
     reg = registry()
     ids = list(reg.terminals) if terminal == "all" else [terminal]
-    reports = await asyncio.gather(*(operations.experts(reg, t) for t in ids))
-    lines = [f"{'TERMINAL':<12} {'AUTOTRADING':<12} EXPERTS"]
-    for r in reports:
-        if r.error:
-            lines.append(f"{r.terminal:<12} {'?':<12} unreachable — {r.error}")
-            continue
-        master = {True: "on", False: "OFF", None: "?"}[r.master]
-        total = len(r.experts)
-        live = sum(e.live_trading is True for e in r.experts)
-        off = [e.short_name for e in r.experts if e.live_trading is False]
-        unknown = sum(e.live_trading is None for e in r.experts)
-        note = ""
-        if r.master is False:
-            note = "  <- master AutoTrading OFF; nothing trades"
-        elif off:
-            note = f"  <- {len(off)} EA live-trading off: {', '.join(off[:5])}"
-        elif unknown:
-            note = f"  <- {unknown} EA flags unreadable"
-        lines.append(f"{r.terminal:<12} {master:<12} {live}/{total} live{note}")
-    return "\n".join(lines)
+    return _fmt_autotrading(await operations.experts_all(reg, ids))
 
 
 @mcp.tool()
@@ -444,15 +473,7 @@ async def mt4_info(terminal: str = "all") -> str:
     """
     reg = registry()
     ids = list(reg.terminals) if terminal == "all" else [terminal]
-    infos = await asyncio.gather(*(operations.info(reg, t) for t in ids))
-    lines = [f"{'TERMINAL':<12} {'BUILD':<22} {'SERVER':<18} PING"]
-    for i in infos:
-        if i.error:
-            lines.append(f"{i.terminal:<12} unreachable — {i.error}")
-            continue
-        ping = "-" if i.ping_ms is None else f"{i.ping_ms:.0f}ms"
-        lines.append(f"{i.terminal:<12} {(i.build or '-'):<22} {(i.server or '-'):<18} {ping}")
-    return "\n".join(lines)
+    return _fmt_info(await operations.info_all(reg, ids))
 
 
 @mcp.tool()

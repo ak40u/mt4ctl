@@ -6,6 +6,30 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-24
+
+### Added
+
+- **CLI/MCP parity.** The CLI previously exposed only setup/deploy commands, so a
+  read like `mt4ctl status demoN` fell through to an argparse usage error (exit 2,
+  empty stdout) — a naive `… | grep down` monitoring script then read it as "up".
+  The CLI now mirrors the full MCP tool surface as subcommands: `status`, `logs`,
+  `control`, `ea-list`, `autotrading`, `info`, `screenshot`, and `login` join the
+  existing `deploy`/`adopt`/`verify`/`list`/`doctor`/`init`. Each is a thin shell
+  over the same `operations` functions and shares the tools' formatters, so the two
+  surfaces cannot diverge.
+- Health-oriented CLI commands (`status`, `verify`, `doctor`) **exit non-zero when
+  something is unhealthy**, so a shell health-check can rely on the exit code
+  instead of grepping output. `mt4ctl status` exits 1 if any selected terminal is
+  not healthy.
+
+### Changed
+
+- The fan-out over terminals used by `ea-list`/`autotrading`/`info` is centralized
+  in `operations.experts_all` / `operations.info_all`, and the table formatters are
+  extracted as shared helpers reused by both the MCP tools and the CLI (no change
+  to tool output).
+
 ## [0.6.0] - 2026-05-24
 
 Findings from a real 7-terminal deploy: verify is now trustworthy, and a few

@@ -198,6 +198,16 @@ async def info(registry: Registry, terminal_id: str) -> TerminalInfo:
     return TerminalInfo(terminal=terminal_id, build=build, server=server, ping_ms=ping)
 
 
+async def experts_all(registry: Registry, terminal_ids: list[str]) -> list[ExpertsReport]:
+    """Fan :func:`experts` out over several terminals (order preserved)."""
+    return list(await asyncio.gather(*(experts(registry, t) for t in terminal_ids)))
+
+
+async def info_all(registry: Registry, terminal_ids: list[str]) -> list[TerminalInfo]:
+    """Fan :func:`info` out over several terminals (order preserved)."""
+    return list(await asyncio.gather(*(info(registry, t) for t in terminal_ids)))
+
+
 async def control(
     registry: Registry,
     terminal_id: str,

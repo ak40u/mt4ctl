@@ -231,18 +231,36 @@ Full reference: [`docs/tools.md`](docs/tools.md).
 
 ## CLI
 
-Besides serving MCP, `mt4ctl` has a few commands for setup and debugging without
-a client:
+The subcommands **mirror the MCP tool surface**, so you can operate — and script —
+the whole farm without an MCP client:
 
 ```bash
+# setup
 mt4ctl init [path]   # write a starter terminals.yaml (default: XDG config path)
 mt4ctl list          # list configured terminals (offline)
 mt4ctl doctor        # check registry, SSH, remote tools, units, data dirs
-mt4ctl deploy <terminal> <bundle> [--dry-run] [--confirm] [--reset-market-watch]   # apply a strategy bundle
-mt4ctl adopt <terminal> <bundle> [--confirm]                # adopt an already-running farm
+
+# read / inspect
+mt4ctl status [terminal]                 # service + broker per terminal (exit 1 if unhealthy)
+mt4ctl logs <terminal> [--pattern RE] [--lines N]
+mt4ctl ea-list [terminal]                # experts attached per terminal
+mt4ctl autotrading [terminal]            # AutoTrading master + per-EA live status
+mt4ctl info [terminal]                   # build / broker server / last ping
+mt4ctl screenshot <terminal> [--out-dir DIR]
+
+# control / lifecycle (env=live needs --confirm)
+mt4ctl control <terminal> {start|stop|restart} [--confirm]
+mt4ctl login <terminal> <server> [--account A] [--password P] [--confirm]
 mt4ctl verify <terminal> [--timeout SECONDS]                # poll until healthy after a restart
+mt4ctl deploy <terminal> <bundle> [--dry-run] [--confirm] [--reset-market-watch]
+mt4ctl adopt <terminal> <bundle> [--confirm]                # adopt an already-running farm
+
 mt4ctl serve         # run the MCP stdio server (the default with no subcommand)
 ```
+
+Health-oriented commands (`status`, `verify`, `doctor`) **exit non-zero when
+something is unhealthy**, so a shell health-check can rely on the exit code rather
+than grepping the output.
 
 ## Deploy
 

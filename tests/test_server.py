@@ -5,11 +5,24 @@ from __future__ import annotations
 import pytest
 
 from mt4ctl.errors import Mt4ctlError
-from mt4ctl.models import AdoptResult, DeployPlan, DeployResult, Env, TerminalStatus
+from mt4ctl.models import (
+    AdoptResult,
+    DeployPlan,
+    DeployResult,
+    Env,
+    Expert,
+    ExpertsReport,
+    TerminalInfo,
+    TerminalStatus,
+)
 from mt4ctl.server import (
     _fmt_adopt_result,
+    _fmt_autotrading,
+    _fmt_control,
     _fmt_deploy_plan,
     _fmt_deploy_result,
+    _fmt_experts,
+    _fmt_info,
     _fmt_status,
     _guard,
 )
@@ -257,6 +270,58 @@ async def test_mt4_verify_is_registered():
 
     tools = {t.name for t in await mcp.list_tools()}
     assert "mt4_verify" in tools
+
+
+# --------------------------------------------------------------------------- #
+# Shared formatters reused by both the MCP tools and the CLI
+# --------------------------------------------------------------------------- #
+def test_fmt_control_renders_conn():
+    st = _status(service_state="active", connected=True)
+    assert _fmt_control("t1", "restart", st) == "t1: restart done -> service=active, conn=up"
+    st_down = _status(service_state="active", connected=False)
+    assert "conn=down" in _fmt_control("t1", "start", st_down)
+    st_unknown = _status(service_state="active", connected=None)
+    assert "conn=?" in _fmt_control("t1", "stop", st_unknown)
+
+
+def test_fmt_experts_single_lists_names():
+    r = ExpertsReport(terminal="t1", master=True, experts=[Expert("SQ\\Strat", 343)])
+    out = _fmt_experts(["t1"], [r])
+    assert "t1: 1 experts" in out and "Strat" in out
+
+
+def test_fmt_experts_single_none_and_unreachable():
+    assert "(none)" in _fmt_experts(["t1"], [ExpertsReport("t1", True, [])])
+    err = ExpertsReport("t1", None, [], error="boom")
+    assert "unreachable — boom" in _fmt_experts(["t1"], [err])
+
+
+def test_fmt_experts_many_counts():
+    reps = [
+        ExpertsReport("t1", True, [Expert("a", 1), Expert("b", 1)]),
+        ExpertsReport("t2", None, [], error="down"),
+    ]
+    out = _fmt_experts(["t1", "t2"], reps)
+    assert "t1" in out and "2 experts" in out
+    assert "t2" in out and "unreachable — down" in out
+
+
+def test_fmt_autotrading_master_off_and_live_off():
+    off = ExpertsReport("t1", False, [Expert("x", 343)])
+    assert "master AutoTrading OFF" in _fmt_autotrading([off])
+    some_off = ExpertsReport("t2", True, [Expert("a", 343), Expert("b", 342)])
+    out = _fmt_autotrading([some_off])
+    assert "live-trading off" in out  # flags=342 -> live bit clear
+    unreachable = ExpertsReport("t3", None, [], error="x")
+    assert "unreachable" in _fmt_autotrading([unreachable])
+
+
+def test_fmt_info_normal_and_unreachable():
+    ok = TerminalInfo(terminal="t1", build="build 1470", server="Demo", ping_ms=53.0)
+    out = _fmt_info([ok])
+    assert "build 1470" in out and "Demo" in out and "53ms" in out
+    bad = TerminalInfo(terminal="t2", build=None, server=None, ping_ms=None, error="boom")
+    assert "unreachable — boom" in _fmt_info([bad])
 
 
 # --------------------------------------------------------------------------- #

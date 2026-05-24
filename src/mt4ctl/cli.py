@@ -1,8 +1,14 @@
 """Console entry point: a thin human-facing CLI around the MCP server.
 
 ``mt4ctl`` with no subcommand runs the MCP stdio server (the form MCP clients
-launch). The ``list``/``doctor``/``init`` subcommands exist purely to make setup
-debuggable without an MCP client — they do not duplicate the MCP tool surface.
+launch). The subcommands mirror the MCP tool surface so the whole farm can also
+be operated — and scripted — without an MCP client: ``init``/``list``/``doctor``
+for setup, and ``status``/``logs``/``control``/``ea-list``/``autotrading``/
+``info``/``screenshot``/``login``/``deploy``/``adopt``/``verify`` for the same
+operations the tools expose. Each is a thin shell over :mod:`mt4ctl.operations`
+reusing the same formatters as the tools, so the two surfaces never diverge.
+Health-oriented commands (``status``, ``verify``, ``doctor``) exit non-zero when
+something is unhealthy, so a shell script can rely on the exit code.
 """
 
 from __future__ import annotations
@@ -186,13 +192,177 @@ def _cmd_init(path: str | None) -> int:
     return 0
 
 
+def _cmd_status(terminal: str) -> int:
+    try:
+        registry = load_registry()
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    from . import operations
+    from .server import _fmt_status
+
+    ids = None if terminal == "all" else [terminal]
+    try:
+        rows = asyncio.run(operations.status(registry, ids))
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    print(_fmt_status(rows))
+    # Non-zero when anything is unhealthy so a monitoring script can trust the exit
+    # code rather than grepping the table (which an unknown subcommand would defeat).
+    return 0 if all(r.healthy for r in rows) else 1
+
+
+def _cmd_logs(terminal: str, *, pattern: str | None, lines: int) -> int:
+    try:
+        registry = load_registry()
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    from . import operations
+
+    try:
+        out = asyncio.run(operations.logs(registry, terminal, pattern=pattern, lines=lines))
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    print(out)
+    # logs() folds an SSH failure into an "error: …" string (no raise); reflect it.
+    return 1 if out.startswith("error:") else 0
+
+
+def _cmd_control(terminal: str, action: str, *, confirm: bool) -> int:
+    try:
+        registry = load_registry()
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    from . import operations
+    from .server import _fmt_control
+
+    try:
+        st = asyncio.run(operations.control(registry, terminal, action, confirm=confirm))
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    print(_fmt_control(terminal, action, st))
+    return 0
+
+
+def _cmd_ea_list(terminal: str) -> int:
+    try:
+        registry = load_registry()
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    from . import operations
+    from .server import _fmt_experts
+
+    ids = list(registry.terminals) if terminal == "all" else [terminal]
+    try:
+        reports = asyncio.run(operations.experts_all(registry, ids))
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    print(_fmt_experts(ids, reports))
+    return 0
+
+
+def _cmd_autotrading(terminal: str) -> int:
+    try:
+        registry = load_registry()
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    from . import operations
+    from .server import _fmt_autotrading
+
+    ids = list(registry.terminals) if terminal == "all" else [terminal]
+    try:
+        reports = asyncio.run(operations.experts_all(registry, ids))
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    print(_fmt_autotrading(reports))
+    return 0
+
+
+def _cmd_info(terminal: str) -> int:
+    try:
+        registry = load_registry()
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    from . import operations
+    from .server import _fmt_info
+
+    ids = list(registry.terminals) if terminal == "all" else [terminal]
+    try:
+        infos = asyncio.run(operations.info_all(registry, ids))
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    print(_fmt_info(infos))
+    return 0
+
+
+def _cmd_screenshot(terminal: str, *, out_dir: str | None) -> int:
+    try:
+        registry = load_registry()
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    from . import operations
+
+    try:
+        path = asyncio.run(
+            operations.screenshot(
+                registry, terminal, out_dir=Path(out_dir) if out_dir else None
+            )
+        )
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    print(f"saved {path}")
+    return 0
+
+
+def _cmd_login(
+    terminal: str, *, server: str, account: str | None, password: str | None, confirm: bool
+) -> int:
+    try:
+        registry = load_registry()
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    from . import login as login_mod
+
+    try:
+        out = asyncio.run(
+            login_mod.login(
+                registry,
+                terminal,
+                account=account,
+                server=server,
+                password=password,
+                confirm=confirm,
+            )
+        )
+    except Mt4ctlError as exc:
+        _print_err(f"error: {exc}")
+        return 1
+    print(out)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mt4ctl",
         description=(
             "Manage headless MetaTrader 4 terminals over SSH. With no subcommand, "
             "runs the MCP stdio server for an MCP client (Claude Code / Desktop). "
-            "The subcommands help you set up and debug without a client."
+            "The subcommands mirror the tool surface so you can operate and script "
+            "the farm without a client."
         ),
         epilog="Config: MT4CTL_CONFIG or ~/.config/mt4ctl/terminals.yaml. "
         "Docs: https://github.com/ak40u/mt4ctl",
@@ -204,6 +374,48 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("doctor", help="check registry, SSH, remote tools, units")
     p_init = sub.add_parser("init", help="write a starter terminals.yaml")
     p_init.add_argument("path", nargs="?", help="where to write (default: XDG config path)")
+    p_status = sub.add_parser(
+        "status", help="service state + broker connection per terminal (exit 1 if unhealthy)"
+    )
+    p_status.add_argument("terminal", nargs="?", default="all", help='terminal id, or "all"')
+    p_logs = sub.add_parser("logs", help="tail / grep a terminal's newest log file")
+    p_logs.add_argument("terminal", help="terminal id")
+    p_logs.add_argument("--pattern", default=None, help="case-insensitive regex to grep")
+    p_logs.add_argument(
+        "--lines", type=int, default=50, metavar="N", help="trailing lines (1-1000)"
+    )
+    p_control = sub.add_parser("control", help="start / stop / restart a terminal's unit")
+    p_control.add_argument("terminal", help="terminal id")
+    p_control.add_argument("action", choices=("start", "stop", "restart"))
+    p_control.add_argument(
+        "--confirm", action="store_true", help="required for env=live terminals"
+    )
+    p_ea = sub.add_parser("ea-list", help="list experts (strategies) attached per terminal")
+    p_ea.add_argument("terminal", nargs="?", default="all", help='terminal id, or "all"')
+    p_auto = sub.add_parser(
+        "autotrading", help="AutoTrading master switch + per-EA live-trading status"
+    )
+    p_auto.add_argument("terminal", nargs="?", default="all", help='terminal id, or "all"')
+    p_info = sub.add_parser("info", help="terminal build, broker server, and last ping")
+    p_info.add_argument("terminal", nargs="?", default="all", help='terminal id, or "all"')
+    p_shot = sub.add_parser("screenshot", help="capture a terminal window to a PNG")
+    p_shot.add_argument("terminal", help="terminal id")
+    p_shot.add_argument(
+        "--out-dir",
+        default=None,
+        metavar="DIR",
+        help="directory to save into (default: cache)",
+    )
+    p_login = sub.add_parser("login", help="one-time headless login for auto-reconnect")
+    p_login.add_argument("terminal", help="terminal id")
+    p_login.add_argument("server", help="broker server name, e.g. ExampleBroker-Demo")
+    p_login.add_argument("--account", default=None, help="login number (default: configured)")
+    p_login.add_argument(
+        "--password", default=None, help="explicit password; else env/secrets file"
+    )
+    p_login.add_argument(
+        "--confirm", action="store_true", help="required for env=live terminals"
+    )
     p_deploy = sub.add_parser("deploy", help="deploy a strategy bundle to a terminal")
     p_deploy.add_argument("terminal", help="terminal id")
     p_deploy.add_argument(
@@ -260,6 +472,30 @@ def main() -> None:
         raise SystemExit(_cmd_doctor())
     if command == "init":
         raise SystemExit(_cmd_init(args.path))
+    if command == "status":
+        raise SystemExit(_cmd_status(args.terminal))
+    if command == "logs":
+        raise SystemExit(_cmd_logs(args.terminal, pattern=args.pattern, lines=args.lines))
+    if command == "control":
+        raise SystemExit(_cmd_control(args.terminal, args.action, confirm=args.confirm))
+    if command == "ea-list":
+        raise SystemExit(_cmd_ea_list(args.terminal))
+    if command == "autotrading":
+        raise SystemExit(_cmd_autotrading(args.terminal))
+    if command == "info":
+        raise SystemExit(_cmd_info(args.terminal))
+    if command == "screenshot":
+        raise SystemExit(_cmd_screenshot(args.terminal, out_dir=args.out_dir))
+    if command == "login":
+        raise SystemExit(
+            _cmd_login(
+                args.terminal,
+                server=args.server,
+                account=args.account,
+                password=args.password,
+                confirm=args.confirm,
+            )
+        )
     if command == "deploy":
         raise SystemExit(
             _cmd_deploy(
