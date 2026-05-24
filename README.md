@@ -71,7 +71,8 @@ other clients are below.
 - **Idempotent strategy deploy** — *kubectl-apply for one terminal*: push a local
   bundle of charts + experts and reconcile a terminal to it, touching only what
   mt4ctl deployed (foreign files like a watchdog's chart stay untouched), with a
-  backup-and-restore-on-failure apply and a report-only health verify.
+  backup-and-restore-on-failure apply and a **polling**, report-only health verify
+  that waits out the broker reconnect instead of guessing from a single snapshot.
 - **Native *and* WSL2 hosts** — one registry, two execution models; commands are
   base64-shipped so nothing breaks in the `cmd.exe → wsl.exe → bash` gauntlet.
 - **Live-trading guardrails** — terminals tagged `env: live` reject mutating
@@ -263,8 +264,11 @@ mt4ctl deploy demo3 ./bundle             # apply (env=live terminals need --conf
 It is **apply-only** (no selection, lot sizing, chart generation, or compilation —
 you build the bundle), idempotent (a re-run is a no-op that still verifies health),
 and managed-subset (foreign files like a watchdog's chart are never touched). The
-write order is **stop → drain → backup → apply → start**, verify is **report-only**,
-and there is no rollback command — recovery is to re-deploy the previous bundle.
+write order is **stop → drain → backup → apply → start**; after the restart verify
+**polls** until the terminal is healthy (report-only — it never reverts), and there
+is no rollback command — recovery is to re-deploy the previous bundle. Add
+`--reset-market-watch` to rebuild the terminal's Market Watch in the stopped window
+(deletes `symbols.sel`, backed up first) and cap unbounded symbol carry-over.
 
 Already running strategies on the farm? Take it under management first with
 `mt4ctl adopt <terminal> <bundle>` (records the current footprint, changes
